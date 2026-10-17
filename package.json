@@ -1,0 +1,19 @@
+{
+  "name": "errorbook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capture failing command runs.",
+  "type": "module",
+  "bin": {
+    "errorbook": "bin/errorbook.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/capture.test.js"
+  },
+  "dependencies": {
+    "picocolors": "^1.1.1"
+  }
+}
