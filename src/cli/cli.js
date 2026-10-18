@@ -9,6 +9,7 @@ import { createPrompts } from './prompts.js';
 import { writeDashboard, openInBrowser } from '../dashboard/index.js';
 import { runDoctor } from '../doctor/index.js';
 import { runScan } from '../scan/index.js';
+import { runDigest } from '../digest/index.js';
 
 export async function runCli(args, deps = {}) {
   const ui = deps.ui ?? createDisplay(), prompts = deps.prompts ?? createPrompts();
@@ -17,13 +18,14 @@ export async function runCli(args, deps = {}) {
   const repeated = deps.shouldInterrupt ?? shouldInterrupt;
   try {
     if (!args.length || ['--help','-h'].includes(args[0])) {
-      ui.warn('Usage:\n  errorbook run [--offline] [--verbose] [--] <command> [args...]\n  errorbook list [--verbose]\n  errorbook sync\n  errorbook dashboard [--no-open]\n  errorbook doctor\n  errorbook scan [dir]'); return args.length ? 0 : 1;
+      ui.warn('Usage:\n  errorbook run [--offline] [--verbose] [--] <command> [args...]\n  errorbook list [--verbose]\n  errorbook sync\n  errorbook dashboard [--no-open]\n  errorbook doctor\n  errorbook scan [dir]\n  errorbook digest [--days N] [--out FILE]'); return args.length ? 0 : 1;
     }
     const verbose = args.includes('--verbose');
     if (args[0] === 'sync') return (await (deps.sync ?? sync)()).ok ? 0 : 1;
     if (args[0] === 'doctor') return await (deps.doctor ?? runDoctor)({ ui });
     // `scan [dir]`: a leading dash is a flag, not a folder name.
     if (args[0] === 'scan') return await (deps.scan ?? runScan)({ ui, dir: args[1]?.startsWith('-') ? null : args[1] ?? null });
+    if (args[0] === 'digest') return await (deps.digest ?? runDigest)({ ui, argv: args.slice(1) });
     if (args[0] === 'dashboard') {
       const events = book.loadAll();
       const file = (deps.writeDashboard ?? writeDashboard)(events);
