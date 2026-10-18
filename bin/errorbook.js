@@ -25,3 +25,4 @@ process.exitCode = code;
 await flush(process.stdout);
 await flush(process.stderr);
 process.exit(code);
+
