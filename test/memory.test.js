@@ -1,4 +1,4 @@
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +8,20 @@ import { append, loadAll, lookup, me, scrub } from "../src/memory/index.js";
 import { cleanName } from "../src/memory/store.js";
 import { confidence } from "../src/memory/tally.js";
 import { fingerprint } from "../src/fingerprint/index.js";
+
+// Nothing here may depend on the caller's shell. A developer with
+// ERRORBOOK_DIR exported for their own notebook, or ERRORBOOK_AUTHOR_NAME set
+// for a demo, would otherwise run these tests against their own data and get
+// failures that say nothing about the code. Cleared once, restored at the end.
+const INHERITED = ["ERRORBOOK_DIR", "ERRORBOOK_AUTHOR", "ERRORBOOK_AUTHOR_NAME", "ERRORBOOK_AUTHOR_EMAIL"];
+const callerEnv = Object.fromEntries(INHERITED.map((key) => [key, process.env[key]]));
+for (const key of INHERITED) delete process.env[key];
+after(() => {
+  for (const key of INHERITED) {
+    if (callerEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = callerEnv[key];
+  }
+});
 
 // Every test gets its own empty notebook folder.
 beforeEach(() => {
