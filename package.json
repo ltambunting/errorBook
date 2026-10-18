@@ -11,7 +11,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test/capture.test.js && node test/fingerprint.test.js && node test/memory.test.js && node test/normalize.test.js && node --test test/cli.test.js && node --test test/dashboard.test.js && node --test test/doctor.test.js && node --test test/scan.test.js && node --test test/digest.test.js && node --test test/lookup.test.js",
+    "test": "node test/capture.test.js && node test/fingerprint.test.js && node test/memory.test.js && node test/normalize.test.js && node --test test/cli.test.js && node --test test/dashboard.test.js && node --test test/doctor.test.js && node --test test/scan.test.js && node --test test/digest.test.js && node --test test/lookup.test.js && node --test test/suggest.test.js",
     "start": "node bin/errorbook.js",
     "demo": "node scripts/run-demo.js known",
     "demo:unknown": "node scripts/run-demo.js unknown",

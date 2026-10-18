@@ -40,7 +40,7 @@ export function loadStats({ fs = nodeFs, file = TEMPLATE } = {}) {
 // terminal. Control characters, newlines and anything non-ASCII are replaced
 // here, so one saved fix cannot break the markdown structure or move the cursor
 // in a terminal that the digest is catted into.
-const ascii = (text) => String(text ?? '').replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim();
+export const ascii = (text) => String(text ?? '').replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim();
 
 const clip = (text) => (text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT - 3)}...` : text);
 
@@ -48,7 +48,7 @@ const clip = (text) => (text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT - 3)}
 // way in, but an older line predates a rule, and a summary was never scrubbed
 // at all -- so anything quoted from the notebook is masked again on the way
 // out, before it lands in a file that gets pasted into a channel.
-const quote = (text) => clip(ascii(scrub(String(text ?? ''))));
+export const quote = (text) => clip(ascii(scrub(String(text ?? ''))));
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
