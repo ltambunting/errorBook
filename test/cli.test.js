@@ -514,7 +514,13 @@ test("sync in a repo with no remote fails gracefully and commits nothing", () =>
 
 test("sync outside a git repo bails before touching anything", () => {
   const plain = fs.mkdtempSync(path.join(os.tmpdir(), "eb-plain-"));
-  const out = cli(["sync"], { cwd: plain, env: { ERRORBOOK_DIR: path.join(plain, ".errorbook") } });
+  const out = cli(["sync"], {
+    cwd: plain,
+    env: {
+      ERRORBOOK_DIR: path.join(plain, ".errorbook"),
+      GIT_CEILING_DIRECTORIES: os.tmpdir(),
+    },
+  });
   assert.equal(out.code, 1);
   assert.match(out.stdout, /isn't a git repository/);
   assert.equal(fs.existsSync(path.join(plain, ".errorbook", ".gitattributes")), false, "nothing is written");
