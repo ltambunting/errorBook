@@ -8,8 +8,13 @@ import { loadAll } from "../memory/store.js";
 
 const say = (msg) => console.log(`[errorbook] ${msg}`);
 
+function exec(args, { trim = true } = {}) {
+  const out = execFileSync("git", args, { cwd: repoRoot(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return trim ? out.trim() : out;
+}
+
 function raw(...args) {
-  return execFileSync("git", args, { cwd: repoRoot(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return exec(args);
 }
 
 // `git config --get user.name` exits non-zero when the key is unset, and prints
@@ -44,23 +49,46 @@ function identityArgs() {
 // Every git call goes through here, so a merge commit made by `git pull` gets
 // the same identity the commit did.
 function git(...args) {
-  return raw(...identityArgs(), ...args);
+  return exec([...identityArgs(), ...args]);
+}
+
+// Same, but byte-for-byte: no trimming, for output whose leading whitespace is
+// part of the data.
+function gitExact(...args) {
+  return exec([...identityArgs(), ...args], { trim: false });
 }
 
 // First line of git's error message, for a short explanation.
 const why = (e) => String(e.stderr || e.message || e).trim().split("\n")[0];
 
 // Which notebook files have actually changed, ignoring the .gitattributes we
-// maintain ourselves. `git status --porcelain` prints two status letters, a
-// space, then the path; a rename prints "old -> new", and we want the new name.
+// maintain ourselves.
+//
+// Each -z entry is two status characters, a space, the path, then a NUL. The
+// status characters can themselves be spaces -- " M" is modified but unstaged --
+// so the output must never be trimmed before the three-character prefix is
+// sliced off. Trimming it turned " M .errorbook/x.jsonl" into
+// "M .errorbook/x.jsonl" and the slice then ate the leading dot of the path.
+//
+// -z also means paths are never quoted or escaped, so a name with a space or a
+// non-ASCII character comes through as itself.
+//
 // --untracked-files=all is required: by default git collapses a new folder to
 // ".errorbook/" and the .gitattributes inside it would never be recognised.
 function notebookChanges(rel) {
-  return git("status", "--porcelain", "--untracked-files=all", "--", rel)
-    .split("\n")
-    .filter(Boolean)
-    .map((entry) => entry.slice(3).trim().split(" -> ").pop().replace(/^"|"$/g, ""))
-    .filter((file) => path.basename(file) !== ".gitattributes");
+  const fields = gitExact("status", "--porcelain", "-z", "--untracked-files=all", "--", rel).split("\0");
+  const changed = [];
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i];
+    if (entry === "") continue;
+    const status = entry.slice(0, 2);
+    const file = entry.slice(3);
+    // A rename or copy is followed by a second field holding the old path; the
+    // new one is what changed.
+    if (status[0] === "R" || status[0] === "C") i++;
+    if (file !== "" && path.basename(file) !== ".gitattributes") changed.push(file);
+  }
+  return changed;
 }
 
 export function sync() {

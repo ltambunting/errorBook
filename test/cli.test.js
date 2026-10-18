@@ -779,3 +779,53 @@ test("a huge stderr is trimmed at both ends before being sent", () => {
   assert.match(sent, /characters of repeated frames omitted/);
   assert.equal(trimForPrompt(undefined), "");
 });
+
+test("sync reports the real path of a modified tracked notebook file", () => {
+  // Regression: raw() trimmed git's whole stdout, which removed the leading
+  // space of " M .errorbook/ankit.jsonl". Slicing the three-character status
+  // prefix then ate the dot and sync said "errorbook/ankit.jsonl". Untracked
+  // files were unaffected, because "?? path" has no leading space.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "eb-sync-"));
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "-q", ".");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "tester");
+
+  const note = (fix) => JSON.stringify({
+    v: 1, type: "solved", fingerprint: "6ce249", fixId: "a1", fix, author: "ankit", ts: "2026-10-18T00:00:00Z",
+  });
+  const book = path.join(repo, ".errorbook");
+  fs.mkdirSync(book, { recursive: true });
+  fs.writeFileSync(path.join(book, "ankit.jsonl"), note("Add a build script") + "\n");
+
+  // Commit it, so the next change is a modification of a tracked file.
+  git("add", "-A");
+  git("commit", "-q", "-m", "first note");
+  assert.equal(git("rev-list", "--count", "HEAD"), "1");
+
+  // Now modify it, and confirm git really does report it with a leading space.
+  fs.appendFileSync(path.join(book, "ankit.jsonl"), note("And run npm install") + "\n");
+  assert.equal(git("status", "--porcelain", "--", ".errorbook"), "M .errorbook/ankit.jsonl".trim(),
+    "sanity: trimmed porcelain is exactly what used to be parsed");
+
+  const run = cli(["sync"], { cwd: repo, env: { ERRORBOOK_DIR: book } });
+  assert.match(run.stdout, /Saved your new notes \(\.errorbook\/ankit\.jsonl\)/,
+    `path lost its leading dot: ${JSON.stringify(run.stdout)}`);
+
+  // And the commit really contains that file.
+  assert.equal(git("rev-list", "--count", "HEAD"), "2");
+  // .gitattributes rides along with the first real note, so check membership.
+  assert.ok(git("show", "--pretty=format:", "--name-only", "HEAD").includes(".errorbook/ankit.jsonl"),
+    "the modified note is not in the commit");
+  assert.match(git("show", "HEAD:.errorbook/ankit.jsonl"), /And run npm install/);
+
+  // An untracked file still works, and so does a path with a space in it.
+  fs.writeFileSync(path.join(book, "ankit laptop.jsonl"), note("Third fix") + "\n");
+  const second = cli(["sync"], { cwd: repo, env: { ERRORBOOK_DIR: book } });
+  assert.match(second.stdout, /Saved your new notes \(\.errorbook\/ankit laptop\.jsonl\)/,
+    `-z should leave an unquoted path: ${JSON.stringify(second.stdout)}`);
+  assert.ok(git("show", "--pretty=format:", "--name-only", "HEAD").includes(".errorbook/ankit laptop.jsonl"),
+    "the spaced filename is not in the commit");
+
+  fs.rmSync(repo, { recursive: true, force: true });
+});

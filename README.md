@@ -1,104 +1,89 @@
 # errorbook
+When one teammate solves an error, nobody on the team has to solve it again.
 
-A team's memory of its own errors. Run a command through `errorbook`; when it
-fails, errorbook fingerprints the error, looks it up in a notebook your team
-shares through git, and tells you what worked last time.
-
+## Before and after
+Ankit hits an error nobody has written up, so errorbook explains it and offers to record what actually worked:
 ```
-$ errorbook run npm run build
-npm error Missing script: "build"
+$ errorbook run git commit -m "add notes"
+ERRORBOOK 27dfb3
+author identity unknown
+This error is not in the notebook yet.
 
-[errorbook] Command failed with exit code 1 (910ms)
-
-ERRORBOOK 6ce249
-npm error missing script: "build"
-
-Known error - found in 11ms
-1. Add a build script to package.json: "build": "tsc -p ."
-   fixed by ankit - 1 week ago
-   confidence: medium - confirmed 1 - rejected 0
-2. Reinstall node_modules
-   fixed by louisa - 1 week ago
-   confidence: low - confirmed 0 - rejected 1
+AI suggestion - unconfirmed - cached explanation
+Git will not create a commit until it knows who is making it, and no author name or email is configured for this repository. Every commit records an author, so it refuses rather than guess.
+ - Set them with "git config user.name 'Your Name'" and "git config user.email you@example.com", adding --global to apply it to every repository, then commit again.
+Save a new solution you actually applied? [y/n] y
+Actual fix applied (Enter to cancel): git config user.name "Ankit" && git config user.email ankit@example.com
+Saved. Run errorbook sync to share it.
 ```
-
-Node 20+. The only runtime dependency is `picocolors`.
-
-## Commands
-
+Louisa, on another laptop, runs `errorbook sync` and hits the same error:
 ```
-errorbook run [--offline] [--verbose] [--] <command> [args...]
-errorbook list [--verbose]
-errorbook sync
-errorbook dashboard [--no-open]
-```
+ERRORBOOK 27dfb3
+author identity unknown
 
-- **run** — run a command, and explain it if it fails. `--offline` skips the AI
-  and uses only what is cached. `--verbose` adds the fingerprint internals and
-  fix ids.
-- **list** — every fix the notebook holds.
-- **sync** — share your notes and collect your teammates', through git. Only
-  ever touches `.errorbook/`.
-- **dashboard** — writes a self-contained HTML page with the team's data
-  embedded and opens it. Hit rate, top errors, hours lost, a fortnight's
-  timeline.
+Known error - found in 12ms
+1. git config user.name "Ankit" && git config user.email ankit@example.com
+   fixed by ankit - just now
+   confidence: unproven - confirmed 0 - rejected 0
+After trying this fix: worked [y], failed [n], error returned [r], Enter to skip:
+```
+Her answer is what turns Ankit's guess into a confirmed fix.
 
 ## How it works
+- **Wrap the command.** stdout and stderr stream through unchanged, stderr is copied, the real exit code is propagated.
+- **Fingerprint the error.** Paths, home directories, timestamps, line numbers, pids, ports, versions and the identity in git's `(for <...>)` are replaced before hashing, so the same error on two machines gets the same id.
+- **Look up the notebook first.** The AI is asked only when the team has nothing; a known error makes no network call.
+- **Save fixes as data in the repo.** Append-only `.errorbook/<person>.jsonl`, never edited or deleted; confidence is counted at read time from confirmations, rejections and whether the error came back.
+- **Share through git.** `errorbook sync` commits and pulls only `.errorbook/`, and stops on a conflict rather than guessing.
 
-1. **capture** runs your command with its output untouched, and keeps a copy of
-   stderr.
-2. **fingerprint** normalises that text — paths, timestamps, line numbers, pids,
-   ports, versions — and hashes it to a short id. The same error on two machines
-   gets the same id.
-3. **memory** is an append-only JSONL file per person under `.errorbook/`.
-   Nothing is ever edited or deleted; confidence is counted at read time.
-4. **explainer** asks an AI only when the notebook has nothing, and caches the
-   answer.
+## Why not just ask an AI agent
+The notebook is shared (your teammate's answer, not a generic one), persistent
+(it remembers the dead ends too), instant (12ms above, not seconds), and needs
+no API call for an error the team already knows.
 
-Credentials are scrubbed before anything is stored, printed or sent anywhere.
-
-## Environment variables
-
-| variable | what it does |
-| --- | --- |
-| `GEMINI_API_KEY` | Google Gemini API key, used by the explainer. Without it the AI step is skipped and only cached explanations are used. Sent in the `x-goog-api-key` header, never in a URL. |
-| `ERRORBOOK_AI_MODEL` | Gemini model to use. Default `gemini-3.8-flash`. |
-| `ERRORBOOK_AI_URL` | Overrides the AI endpoint entirely, for a local stub or a proxy. When set, no API key is required. |
-| `ERRORBOOK_DIR` | Where the notebook lives. Default `<repo root>/.errorbook`. |
-| `ERRORBOOK_AUTHOR` | Who you are in the notebook. Default: your `git config user.name`. |
-| `NO_COLOR` | Any non-empty value turns colour off. Colour is also off automatically when output is not a terminal. |
-
-Set the key in your shell, not in a file in the repo:
-
+## Install and use
+Not published to npm. From a clone: `npm install && npm link`.
 ```
-export GEMINI_API_KEY=...        # bash/zsh
-$env:GEMINI_API_KEY = '...'      # PowerShell
+errorbook run npm run build        # run a command, explain it if it fails
+errorbook run --offline <cmd>      # never call the AI, cache only
+errorbook run --verbose <cmd>      # fingerprint internals and fix ids
+errorbook list                     # every fix the notebook holds
+errorbook sync                     # share and collect, through git
+errorbook dashboard                # hit rate, top errors, hours lost
 ```
 
-## Where things are written
-
-| path | git | what |
-| --- | --- | --- |
-| `.errorbook/<author>.jsonl` | committed | the shared notebook |
-| `.errorbook/local/` | ignored | retry counter, explanation cache, generated dashboard |
-| `src/explainer/seed-cache.json` | committed | explanations for the demo's errors, so it works offline |
-
-## The demo
-
-Four deliberately broken states, a seeded notebook and a reset script:
-
+## Two laptops
 ```
-sh demo/reset.sh        # or: pwsh demo/reset.ps1
+git init --bare /shared/team.git
+DEMO_REMOTE=/shared/team.git sh demo/reset.sh    # on each laptop
 cd demo/project
 ```
+`reset.sh` builds a project in four deliberately broken states and seeds a notebook. Full walkthrough in [demo/README.md](demo/README.md).
 
-See [demo/README.md](demo/README.md).
+## Environment variables
+| variable | what it does |
+| --- | --- |
+| `ERRORBOOK_DIR` | Where the notebook lives. Default `<repo root>/.errorbook`. |
+| `ERRORBOOK_AUTHOR_NAME` | Who you are in the notebook; also signs sync commits. |
+| `ERRORBOOK_AUTHOR_EMAIL` | Email for sync commits; its local part is a fallback name. |
+| `GEMINI_API_KEY` | Enables live AI explanations. Sent in the `x-goog-api-key` header, never in a URL. Cached explanations work without it. |
+| `ERRORBOOK_AI_URL` | Overrides the AI endpoint, for a stub or proxy. No key needed. |
+| `ERRORBOOK_AI_MODEL` | Gemini model. Default `gemini-3.8-flash`. |
+| `DEMO_REMOTE` | Shared git URL for the two-laptop demo. |
+
+## Safety
+`scrub()` masks credentials before anything is written, printed or sent: URL
+userinfo, assignments to secret-like keys, `sk-`/`ghp_`/`AKIA`/`xoxb-`/`eyJ`
+prefixes, PEM blocks, and long base64 or hex runs. Author names and emails stay
+readable on purpose, since the git identity error is one we explain. Notebook
+text is stripped of control characters before display, so a fix written by
+someone else cannot recolour your terminal or clear the screen.
+
+## Honest limits
+- Developed and tested on Windows only; nothing is platform-specific by design, but no other OS has been run.
+- The dashboard's hit rate is derived from the notebook, not measured: the first solve of an error counts as a miss, every later encounter as a hit. The page says so too.
+- The demo's explanations come from a committed seed cache (`src/explainer/seed-cache.json`) so it works offline; two of the four were written by hand after the Gemini free tier ran out.
+- `errorbook sync` touches only `.errorbook/`, and resolves to the nearest enclosing git repository, so run it from the project you mean.
 
 ## Tests
-
-```
-npm test
-```
-
-Six suites: capture, fingerprint, memory, normalize, cli, dashboard. The AI is
-never called from the tests.
+`npm test` runs six suites with no network and no API key: capture, fingerprint, memory, normalize, cli, dashboard.

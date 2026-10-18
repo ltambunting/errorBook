@@ -36,7 +36,17 @@ case "$PWD/" in
     ;;
 esac
 
-rm -rf "$PROJECT"
+# Windows will not always let the directory itself be removed -- another shell
+# sitting in it, or a file sync client holding a handle -- but its contents can
+# still go. Emptying it is as good as recreating it, and beats leaving the
+# project half-deleted because `rm -rf` stopped partway.
+if ! rm -rf "$PROJECT" 2>/dev/null; then
+  find "$PROJECT" -mindepth 1 -delete 2>/dev/null || true
+  if [ -n "$(ls -A "$PROJECT" 2>/dev/null)" ]; then
+    say "Could not clear $PROJECT. Close anything open in it and try again."
+    exit 1
+  fi
+fi
 
 # --- optional: a shared remote, for the two-laptop demo --------------------
 # DEMO_REMOTE=<url> clones that repository instead of starting a fresh one, and

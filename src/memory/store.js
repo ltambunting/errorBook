@@ -11,14 +11,39 @@ export function cleanName(name) {
   return String(name || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "someone";
 }
 
-// Who is running the tool: their git name, lowercased.
-export function me() {
-  if (process.env.ERRORBOOK_AUTHOR) return cleanName(process.env.ERRORBOOK_AUTHOR);
+// A slug, or null when there was nothing usable to slugify. cleanName falls
+// back to "someone", which is a fine last resort but a bad way to decide that
+// one source was empty and the next should be tried.
+function slugOrNull(value) {
+  const raw = String(value ?? "").trim();
+  if (raw === "") return null;
+  const slug = cleanName(raw);
+  return slug === "someone" && !/^someone$/i.test(raw) ? null : slug;
+}
+
+function gitConfig(key) {
   try {
-    return cleanName(execFileSync("git", ["config", "user.name"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    return execFileSync("git", ["config", key], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   } catch {
-    return "someone";
+    return ""; // not a git repo, or the key is unset
   }
+}
+
+// Who is running the tool, in order of how deliberately it was stated:
+// ERRORBOOK_AUTHOR_NAME, then the older ERRORBOOK_AUTHOR, then the git name,
+// then the local part of an email, then a last resort.
+//
+// The demo blanks the local git user.name on purpose, and two-laptop mode leaves
+// only the email set, so falling straight to "someone" from an empty git name
+// would file both laptops' notes under the same anonymous author.
+export function me() {
+  return (
+    slugOrNull(process.env.ERRORBOOK_AUTHOR_NAME) ??
+    slugOrNull(process.env.ERRORBOOK_AUTHOR) ??
+    slugOrNull(gitConfig("user.name")) ??
+    slugOrNull(String(process.env.ERRORBOOK_AUTHOR_EMAIL || gitConfig("user.email")).split("@")[0]) ??
+    "someone"
+  );
 }
 
 // Same error + same fix text → same ID, no matter who saves it.
