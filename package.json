@@ -11,7 +11,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test/capture.test.js && node test/fingerprint.test.js && node test/memory.test.js && node test/normalize.test.js"
+    "test": "node test/capture.test.js && node test/fingerprint.test.js && node test/memory.test.js && node test/normalize.test.js && node --test test/cli.test.js"
   },
   "dependencies": {
     "picocolors": "^1.1.1"

@@ -15,6 +15,19 @@ function git(...args) {
 // First line of git's error message, for a short explanation.
 const why = (e) => String(e.stderr || e.message || e).trim().split("\n")[0];
 
+// Which notebook files have actually changed, ignoring the .gitattributes we
+// maintain ourselves. `git status --porcelain` prints two status letters, a
+// space, then the path; a rename prints "old -> new", and we want the new name.
+// --untracked-files=all is required: by default git collapses a new folder to
+// ".errorbook/" and the .gitattributes inside it would never be recognised.
+function notebookChanges(rel) {
+  return git("status", "--porcelain", "--untracked-files=all", "--", rel)
+    .split("\n")
+    .filter(Boolean)
+    .map((entry) => entry.slice(3).trim().split(" -> ").pop().replace(/^"|"$/g, ""))
+    .filter((file) => path.basename(file) !== ".gitattributes");
+}
+
 export function sync() {
   const dir = dataDir();
   const rel = path.relative(repoRoot(), dir) || ".errorbook";
@@ -26,21 +39,25 @@ export function sync() {
     return { ok: false, step: "setup" };
   }
 
-  // If two people's versions of a notebook file meet, keep both sides' lines.
   fs.mkdirSync(dir, { recursive: true });
-  const attrs = path.join(dir, ".gitattributes");
-  if (!fs.existsSync(attrs)) fs.writeFileSync(attrs, "*.jsonl merge=union\n");
 
   const before = new Set(loadAll().map((line) => JSON.stringify(line)));
 
-  // 1. Commit only .errorbook/, never anything else.
+  // 1. Commit only .errorbook/, never anything else, and only when there is
+  //    really something of yours to share. The .gitattributes below is
+  //    bookkeeping we write ourselves, so it never counts as a note and never
+  //    earns a commit of its own: it rides along with the first real one.
   let committed = 0;
   try {
-    git("add", "--", rel);
-    committed = git("diff", "--cached", "--name-only", "--", rel).split("\n").filter(Boolean).length;
-    if (committed) {
-      git("commit", "-m", "errorbook: sync team fixes", "--", rel);
-      say("Saved your new notes.");
+    const changes = notebookChanges(rel);
+    if (changes.length) {
+      // If two people's versions of a notebook file meet, keep both sides' lines.
+      const attrs = path.join(dir, ".gitattributes");
+      if (!fs.existsSync(attrs)) fs.writeFileSync(attrs, "*.jsonl merge=union\n");
+      git("add", "--", rel);
+      committed = git("diff", "--cached", "--name-only", "--", rel).split("\n").filter(Boolean).length;
+      if (committed) git("commit", "-m", "errorbook: sync team fixes", "--", rel);
+      say(`Saved your new notes (${changes.join(", ")}).`);
     } else {
       say("No new notes of yours to share.");
     }

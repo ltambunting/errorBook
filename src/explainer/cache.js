@@ -1,11 +1,10 @@
 import { readFile,writeFile,rename,mkdir,open,unlink } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { localDir } from '../paths.js';
+// The same .errorbook/local that holds capture's retry counter.
 export function defaultCacheFile() {
-  let root=process.cwd();
-  try { root=execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim(); } catch {}
-  return join(resolve(process.env.ERRORBOOK_DIR || join(root,'.errorbook')),'local','explanation-cache.json');
+  return join(localDir(),'explanation-cache.json');
 }
 export const cacheKey=event=>createHash('sha256').update(JSON.stringify([event.normalizationVersion,event.errorId,event.normalizedError,'v1'])).digest('hex');
 export function createCache(file) {

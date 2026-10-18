@@ -1,0 +1,467 @@
+// Covers src/cli/ and src/explainer/, which shipped without tests.
+//
+// runCli takes a `deps` bag, so the flows are driven with scripted prompts and
+// a stubbed capture (no npm spawn, no network) while display, memory and the
+// fingerprint are the real ones. `errorbook sync` is the exception: it depends
+// on the process cwd, so it runs in a child process against a throwaway repo.
+import { test, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Writable, PassThrough } from "node:stream";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { runCli } from "../src/cli/cli.js";
+import { createDisplay } from "../src/cli/display.js";
+import { createPrompts } from "../src/cli/prompts.js";
+import { createExplainer } from "../src/explainer/explainer.js";
+import { append } from "../src/memory/index.js";
+
+const BIN = fileURLToPath(new URL("../bin/errorbook.js", import.meta.url));
+
+// Runs the real CLI in a child process. A failing sync exits 1, which makes
+// execFileSync throw, so the output is collected either way.
+function cli(args, { cwd, env = {} }) {
+  try {
+    const stdout = execFileSync(process.execPath, [BIN, ...args], {
+      cwd, encoding: "utf8", env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { code: 0, stdout, stderr: "" };
+  } catch (e) {
+    return { code: e.status ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+  }
+}
+
+// Every test gets its own empty notebook folder.
+let dir;
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "eb-cli-"));
+  process.env.ERRORBOOK_DIR = dir;
+  process.env.ERRORBOOK_AUTHOR = "ankit";
+});
+
+// --- harness --------------------------------------------------------------
+
+function sink(isTTY = false) {
+  const out = [], err = [];
+  const stream = (bucket) => {
+    const s = new Writable({ write(c, e, cb) { bucket.push(c.toString()); cb(); } });
+    s.isTTY = isTTY;
+    return s;
+  };
+  return { out: stream(out), err: stream(err), stdout: () => out.join(""), stderr: () => err.join("") };
+}
+
+// A prompt source that answers from a list, so the interactive branches run
+// without a terminal. Records what it was asked.
+function scripted(...answers) {
+  const asked = [];
+  return {
+    interactive: true,
+    asked,
+    closed: false,
+    async ask(text) { asked.push(text); return String(answers.shift() ?? "").trim(); },
+    async yes(text) { asked.push(text); return /^(y|yes)$/i.test(String(answers.shift() ?? "").trim()); },
+    close() { this.closed = true; },
+  };
+}
+
+// Real captures, so the ids here are the ids the notebook actually stores.
+const sample = (name) => fs.readFileSync(new URL(`../samples/${name}`, import.meta.url), "utf8");
+const NPM_BUILD = sample("npm-missing-script-ankit.txt");              // 6ce249
+const NPM_OTHER = sample("npm-missing-script-doesnotexist-ankit.txt"); // e73c44
+
+// Stands in for the capture module: reports one failure, returns its exit code.
+const failsWith = (stderr, exitCode = 1) => async (argv, { onFailure }) => {
+  await onFailure({ command: argv.join(" "), argv, stderr, exitCode, cwd: "/project", durationMs: 12 });
+  return exitCode;
+};
+
+function stubExplainer(result = { status: "unavailable", reason: "offline", message: "no AI here" }) {
+  return { calls: 0, offline: null, async explain(event, opts = {}) { this.calls++; this.offline = opts.offline; this.event = event; return result; } };
+}
+
+// Assembles the deps bag; every test overrides only what it cares about.
+async function run(args, over = {}) {
+  const ui = over.sink ?? sink();
+  const prompts = over.prompts ?? scripted();
+  const explainer = over.explainer ?? stubExplainer();
+  const code = await runCli(args, {
+    ui: createDisplay(ui.out, ui.err),
+    prompts,
+    explainer,
+    capture: over.capture ?? failsWith(NPM_BUILD),
+    shouldInterrupt: over.shouldInterrupt ?? (() => false),
+    ...(over.sync ? { sync: over.sync } : {}),
+  });
+  return { code, prompts, explainer, stdout: ui.stdout(), stderr: ui.stderr() };
+}
+
+const notebook = () => fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+  .flatMap((f) => fs.readFileSync(path.join(dir, f), "utf8").split("\n").filter(Boolean).map(JSON.parse));
+
+// --- the failure flow -----------------------------------------------------
+
+test("an unknown error is reported, explained, and can be saved", async () => {
+  const r = await run(["run", "npm", "run", "build"], {
+    prompts: scripted("y", "Add a build script to package.json"),
+  });
+
+  assert.equal(r.code, 1, "the command's exit code is propagated");
+  assert.match(r.stdout, /ERRORBOOK 6ce249/);
+  assert.match(r.stdout, /This error is not in the notebook yet/);
+  assert.equal(r.explainer.calls, 1, "the explainer is asked only when nothing is known");
+  assert.match(r.stdout, /Saved fix/);
+
+  const saved = notebook();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].type, "solved");
+  assert.equal(saved[0].fingerprint, "6ce249");
+  assert.equal(saved[0].fix, "Add a build script to package.json");
+  assert.equal(saved[0].author, "ankit");
+  assert.equal(r.prompts.closed, true, "the prompt source is always closed");
+});
+
+test("declining the save prompt writes nothing", async () => {
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("n") });
+  assert.equal(notebook().length, 0);
+  assert.doesNotMatch(r.stdout, /Saved fix/);
+});
+
+test("answering the save prompt with empty text writes nothing", async () => {
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "") });
+  assert.equal(notebook().length, 0);
+  assert.match(r.stdout, /Not saved: no fix text supplied/);
+});
+
+test("the same error again is an exact match, and the AI is not asked", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("", "n") });
+  assert.match(r.stdout, /Exact match - 1 solution/);
+  assert.match(r.stdout, /1\. Add a build script to package\.json/);
+  assert.match(r.stdout, /confidence: unproven/);
+  assert.equal(r.explainer.calls, 0, "a known error needs no AI explanation");
+});
+
+test("a different missing script loose-matches the saved fix", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  const r = await run(["run", "npm", "run", "doesnotexist"], {
+    capture: failsWith(NPM_OTHER),
+    prompts: scripted("", "n"),
+  });
+  assert.match(r.stdout, /ERRORBOOK e73c44/, "a different script is a different fingerprint");
+  assert.match(r.stdout, /Similar error - 1 solution/);
+  assert.match(r.stdout, /Add a build script to package\.json/);
+  assert.match(r.stdout, /not an exact match/);
+  assert.equal(r.explainer.calls, 0);
+});
+
+// --- confirming ------------------------------------------------------------
+
+test("a teammate's confirmation is recorded and raises confidence", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  process.env.ERRORBOOK_AUTHOR = "louis";
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "n") });
+
+  assert.match(r.stdout, /Recorded confirmed/);
+  assert.match(r.stdout, /confirmed 1 times/);
+  assert.match(r.stdout, /confidence: medium/);
+  const votes = notebook().filter((e) => e.type === "confirmed");
+  assert.equal(votes.length, 1);
+  assert.equal(votes[0].author, "louis");
+  assert.equal(votes[0].fingerprint, "6ce249");
+});
+
+test("you cannot confirm your own fix, and nothing is written", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "n") });
+  assert.match(r.stdout, /cannot confirm your own fix/);
+  assert.equal(notebook().filter((e) => e.type === "confirmed").length, 0, "the self-vote is refused, not stored");
+  assert.match(r.stdout, /confirmed 0 times/);
+});
+
+test("a rejection is recorded against a loose match's own fingerprint", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  process.env.ERRORBOOK_AUTHOR = "louis";
+  await run(["run", "npm", "run", "doesnotexist"], { capture: failsWith(NPM_OTHER), prompts: scripted("n", "n") });
+
+  const votes = notebook().filter((e) => e.type === "rejected");
+  assert.equal(votes.length, 1);
+  assert.equal(votes[0].fingerprint, "6ce249", "the vote belongs to the fix's error, not the one just seen");
+});
+
+// --- list ------------------------------------------------------------------
+
+test("list shows saved fixes without claiming a match kind", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  const r = await run(["list"]);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /Fingerprint: 6ce249/);
+  assert.match(r.stdout, /1\. Add a build script to package\.json/);
+  assert.doesNotMatch(r.stdout, /Exact match/, "a listing is not a match");
+  assert.doesNotMatch(r.stdout, /Similar error/);
+});
+
+test("list on an empty notebook says so", async () => {
+  const r = await run(["list"]);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /No saved fixes yet/);
+});
+
+// --- degraded inputs -------------------------------------------------------
+
+test("a failure with no stderr skips lookup instead of throwing", async () => {
+  const r = await run(["run", "node", "x.js"], { capture: failsWith("", 3) });
+  assert.equal(r.code, 3, "the exit code still comes through");
+  assert.match(r.stdout, /No stderr fingerprint is available/);
+  assert.equal(r.explainer.calls, 0);
+  assert.equal(r.prompts.asked.length, 0, "nothing is offered to save when there is nothing to key it on");
+  assert.equal(notebook().length, 0);
+});
+
+test("whitespace-only stderr is treated the same way", async () => {
+  const r = await run(["run", "node", "x.js"], { capture: failsWith("   \n \t \n", 4) });
+  assert.equal(r.code, 4);
+  assert.match(r.stdout, /No stderr fingerprint is available/);
+});
+
+test("piped stdin is lookup-only: no prompts, nothing written", async () => {
+  await (async () => {
+    const ui = sink();
+    await runCli(["run", "npm", "run", "build"], {
+      ui: createDisplay(ui.out, ui.err),
+      prompts: createPrompts({ input: new PassThrough(), output: ui.out }), // neither is a TTY
+      explainer: stubExplainer(),
+      capture: failsWith(NPM_BUILD),
+      shouldInterrupt: () => false,
+    });
+    assert.match(ui.stdout(), /ERRORBOOK 6ce249/, "the lookup still runs");
+    assert.doesNotMatch(ui.stdout(), /Save a new solution/, "but nothing is asked");
+    assert.equal(notebook().length, 0);
+  })();
+});
+
+test("a bare null line skips itself instead of taking out the notebook", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+
+  // JSON.parse("null") succeeds, so this used to reach e.type and a.ts.
+  const file = path.join(dir, "ankit.jsonl");
+  fs.appendFileSync(file, "null\n{broken\n42\n[]\n\"a string\"\n");
+
+  const listed = await run(["list"]);
+  assert.equal(listed.code, 0, "list survives the junk");
+  assert.match(listed.stdout, /Fingerprint: 6ce249/);
+  assert.doesNotMatch(listed.stderr, /Cannot read properties/);
+
+  const looked = await run(["run", "npm", "run", "build"], { prompts: scripted("", "n") });
+  assert.match(looked.stdout, /Exact match/, "lookup survives it too");
+  assert.doesNotMatch(looked.stderr, /Assistance unavailable/);
+});
+
+// --- usage, errors and exit codes -----------------------------------------
+
+test("usage and errors go to stderr, and exit codes are unchanged", async () => {
+  const none = await run([]);
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, /Usage:/);
+  assert.equal(none.stdout, "", "usage must not pollute stdout");
+
+  const help = await run(["--help"]);
+  assert.equal(help.code, 0);
+  assert.match(help.stderr, /Usage:/);
+  assert.equal(help.stdout, "");
+
+  const bogus = await run(["bogus"]);
+  assert.equal(bogus.code, 1);
+  assert.match(bogus.stderr, /Unknown command: bogus/);
+  assert.equal(bogus.stdout, "");
+
+  const bare = await run(["run"]);
+  assert.equal(bare.code, 1);
+  assert.match(bare.stderr, /no command given/);
+  assert.equal(bare.stdout, "");
+});
+
+test("every byte of normal output is ASCII", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+  const r = await run(["run", "npm", "run", "build"], {
+    prompts: scripted("", "n"),
+    explainer: stubExplainer({ status: "ok", source: "cache", value: { explanation: "No such script.", suggestedSteps: ["Run npm run."], caveats: ["Unconfirmed."] } }),
+  });
+  const listed = await run(["list"]);
+  for (const [label, text] of [["run", r.stdout], ["list", listed.stdout]]) {
+    const bad = [...text].filter((c) => c.charCodeAt(0) > 127);
+    assert.deepEqual(bad, [], `${label} emitted non-ASCII: ${JSON.stringify(bad)}`);
+  }
+});
+
+// --- display details ------------------------------------------------------
+
+test("a multi-line fix stays indented under its own number", async () => {
+  const ui = sink();
+  createDisplay(ui.out, ui.err).fixes([
+    { fix: "Add a build script:\n  \"build\": \"tsc\"\nthen reinstall", author: "ankit", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "abc" },
+    { fix: "Second solution", author: "louis", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "def" },
+  ], "exact");
+
+  const lines = ui.stdout().split("\n");
+  const numbered = lines.filter((l) => /^\d+\. /.test(l));
+  assert.equal(numbered.length, 2, "only real solutions start with a number");
+  // Continuation lines are indented, so they cannot be mistaken for entries.
+  assert.ok(lines.includes('     "build": "tsc"'), `expected an indented continuation, got ${JSON.stringify(lines)}`);
+  assert.ok(lines.includes("   then reinstall"));
+});
+
+test("colour follows the TTY and NO_COLOR", async () => {
+  const fixture = [{ fix: "x", author: "a", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "i" }];
+  const colored = (isTTY, noColor) => {
+    const before = process.env.NO_COLOR;
+    if (noColor === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = noColor;
+    const ui = sink(isTTY);
+    createDisplay(ui.out, ui.err).fixes(fixture, "exact");
+    if (before === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = before;
+    return /\x1b\[/.test(ui.stdout());
+  };
+  assert.equal(colored(true, undefined), true, "a terminal gets colour");
+  assert.equal(colored(false, undefined), false, "a pipe does not");
+  assert.equal(colored(true, "1"), false, "NO_COLOR=1 disables it");
+  assert.equal(colored(true, ""), true, "an empty NO_COLOR is ignored, per the spec");
+});
+
+test("control characters in a saved fix cannot drive the terminal", async () => {
+  const ui = sink();
+  createDisplay(ui.out, ui.err).fixes([
+    { fix: "\x1b[31mred\x1b[0m\x1b[2J\roverwrite", author: "a", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "i" },
+  ], "exact");
+  const out = ui.stdout().replace(/\x1b\[36;1m|\x1b\[0m\n/g, ""); // the heading's own colour
+  assert.doesNotMatch(out, /\x1b/, "no escape characters survive from notebook text");
+  assert.doesNotMatch(out, /\r/);
+});
+
+// --- the explainer --------------------------------------------------------
+
+test("the explainer falls back to cache offline, and reports when it cannot", async () => {
+  const event = { errorId: "6ce249", normalizedError: 'npm error missing script: "build"', normalizationVersion: "test-1" };
+  const cacheFile = path.join(dir, "local", "explanation-cache.json");
+  const value = { explanation: "No such script.", suggestedSteps: ["Run npm run."], caveats: ["Unconfirmed."] };
+
+  const offlineFirst = await createExplainer({ cacheFile, provider: async () => value }).explain(event, { offline: true });
+  assert.equal(offlineFirst.status, "unavailable");
+  assert.equal(offlineFirst.reason, "offline");
+
+  const live = await createExplainer({ cacheFile, provider: async () => value }).explain(event, {});
+  assert.equal(live.status, "ok");
+  assert.equal(live.source, "live");
+
+  // Now it is cached, so offline succeeds without a provider at all.
+  const cached = await createExplainer({
+    cacheFile,
+    provider: async () => { throw new Error("the provider must not be called"); },
+  }).explain(event, { offline: true });
+  assert.equal(cached.status, "ok");
+  assert.equal(cached.source, "cache");
+  assert.deepEqual(cached.value, value);
+});
+
+test("a provider failure is reported, not thrown, and a malformed answer is rejected", async () => {
+  const event = { errorId: "a1b2c3", normalizedError: "boom", normalizationVersion: "test-1" };
+  const cacheFile = path.join(dir, "local", "explanation-cache.json");
+
+  const broke = await createExplainer({
+    cacheFile,
+    provider: async () => { throw Object.assign(new Error("Could not reach ai.example.com (ECONNREFUSED). Run with --offline to skip the AI."), { reason: "unreachable" }); },
+  }).explain(event, {});
+  assert.equal(broke.status, "unavailable");
+  assert.equal(broke.reason, "unreachable");
+  assert.match(broke.message, /--offline/, "the message says what to do about it");
+
+  const junk = await createExplainer({ cacheFile, provider: async () => ({ explanation: "" }) }).explain(event, {});
+  assert.equal(junk.status, "unavailable");
+  assert.equal(junk.reason, "invalid_response");
+
+  const noFingerprint = await createExplainer({ cacheFile, provider: async () => ({}) }).explain({}, {});
+  assert.equal(noFingerprint.reason, "invalid_input");
+});
+
+test("the AI adapter times out well before the OS does, with an actionable message", async () => {
+  const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
+  const event = { errorId: "a1b2c3", normalizedError: "boom" };
+
+  const unset = await aiAdapter(event, { url: "" }).catch((e) => e);
+  assert.equal(unset.reason, "not_configured");
+
+  // 10.255.255.1 is unroutable: the OS connect timeout is far longer than ours.
+  const started = Date.now();
+  const timedOut = await aiAdapter(event, { url: "http://10.255.255.1:8731/x", timeoutMs: 1000 }).catch((e) => e);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 5000, `gave up in ${elapsed}ms, so the abort signal beat the OS`);
+  assert.ok(["timeout", "unreachable"].includes(timedOut.reason), `unexpected reason ${timedOut.reason}`);
+  assert.doesNotMatch(timedOut.message, /^fetch failed$/, "never Node's bare message");
+  assert.match(timedOut.message, /10\.255\.255\.1/, "says which host");
+  assert.match(timedOut.message, /--offline/, "says what to do");
+});
+
+// --- sync ------------------------------------------------------------------
+
+test("sync's result decides the exit code", async () => {
+  const ok = await run(["sync"], { sync: async () => ({ ok: true }) });
+  assert.equal(ok.code, 0);
+  const bad = await run(["sync"], { sync: async () => ({ ok: false, step: "pull" }) });
+  assert.equal(bad.code, 1);
+});
+
+test("sync in a repo with no remote fails gracefully and commits nothing", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "eb-repo-"));
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "-q", ".");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "tester");
+  git("commit", "-q", "--allow-empty", "-m", "init");
+  const commits = () => git("rev-list", "--count", "HEAD");
+  assert.equal(commits(), "1");
+
+  const sync = () => cli(["sync"], { cwd: repo, env: { ERRORBOOK_DIR: path.join(repo, ".errorbook") } });
+
+  // Nothing of ours to share: no commit may appear, however often it is run.
+  const first = sync();
+  assert.equal(first.code, 1, "no remote is a failure, but a reported one");
+  assert.match(first.stdout, /No new notes of yours to share/);
+  assert.match(first.stdout, /Couldn't get teammates' notes/, "no remote is reported, not thrown");
+  assert.doesNotMatch(first.stdout, /Saved your new notes/);
+  assert.doesNotMatch(first.stderr, /at .*\n\s+at /, "no stack trace reaches the user");
+  sync();
+  assert.equal(commits(), "1", "a failed sync must not leave commits behind");
+
+  // With a real note, it does commit, and carries .gitattributes along.
+  fs.writeFileSync(
+    path.join(repo, ".errorbook", "ankit.jsonl"),
+    JSON.stringify({ v: 1, type: "solved", fingerprint: "6ce249", fixId: "a1", fix: "Add a build script", author: "ankit", ts: "2026-10-18T00:00:00Z" }) + "\n",
+  );
+  const withNote = sync();
+  assert.match(withNote.stdout, /Saved your new notes \(.*ankit\.jsonl.*\)/);
+  assert.equal(commits(), "2");
+  const tracked = git("ls-tree", "-r", "--name-only", "HEAD");
+  assert.match(tracked, /\.errorbook\/ankit\.jsonl/);
+  assert.match(tracked, /\.errorbook\/\.gitattributes/, ".gitattributes rides along with the first real note");
+
+  // And again with nothing new: still two commits.
+  sync();
+  assert.equal(commits(), "2");
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test("sync outside a git repo bails before touching anything", () => {
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), "eb-plain-"));
+  const out = cli(["sync"], { cwd: plain, env: { ERRORBOOK_DIR: path.join(plain, ".errorbook") } });
+  assert.equal(out.code, 1);
+  assert.match(out.stdout, /isn't a git repository/);
+  assert.equal(fs.existsSync(path.join(plain, ".errorbook", ".gitattributes")), false, "nothing is written");
+  fs.rmSync(plain, { recursive: true, force: true });
+});

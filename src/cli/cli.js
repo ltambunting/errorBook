@@ -14,13 +14,14 @@ export async function runCli(args, deps = {}) {
   const repeated = deps.shouldInterrupt ?? shouldInterrupt;
   try {
     if (!args.length || ['--help','-h'].includes(args[0])) {
-      ui.line('Usage:\n  errorbook run [--offline] [--] <command> [args...]\n  errorbook list\n  errorbook sync'); return args.length ? 0 : 1;
+      ui.warn('Usage:\n  errorbook run [--offline] [--] <command> [args...]\n  errorbook list\n  errorbook sync'); return args.length ? 0 : 1;
     }
     if (args[0] === 'sync') return (await (deps.sync ?? sync)()).ok ? 0 : 1;
     if (args[0] === 'list') {
       const ids = [...new Set(book.loadAll().filter(e => e.type === 'solved').map(e => e.fingerprint))];
       if (!ids.length) ui.line('No saved fixes yet.');
-      for (const id of ids) { const result = book.lookup(id); if (result.fix) { ui.line(`\nFingerprint: ${id}`); ui.fixes([result.fix,...result.alternatives],result.kind); } } return 0;
+      // No kind: a listing is not a match, so no "Exact match" heading.
+      for (const id of ids) { const result = book.lookup(id); if (result.fix) { ui.line(`\nFingerprint: ${id}`); ui.fixes([result.fix,...result.alternatives]); } } return 0;
     }
     if (args[0] !== 'run') throw new Error(`Unknown command: ${args[0]}`);
     const argv = args.slice(1); let offline = false;
@@ -34,7 +35,7 @@ export async function runCli(args, deps = {}) {
         if (repeated(report.command)) ui.line('[errorbook] This command has failed 3+ times in the last 5 minutes.');
         if (!event) { ui.line('No stderr fingerprint is available. Lookup and AI analysis were skipped.'); return; }
         ui.error(event);
-        ui.line(`Language: ${event.loose.lang} · type: ${event.loose.errorType ?? '-'} · file: ${event.file ?? '-'}`);
+        ui.line(`Language: ${event.loose.lang} - type: ${event.loose.errorType ?? '-'} - file: ${event.file ?? '-'}`);
         const result = await book.lookup(event.errorId,event.loose);
         let explanation = null;
         if (result.kind !== 'none' && result.fix) {
@@ -71,8 +72,8 @@ export async function runCli(args, deps = {}) {
             ui.line(`Saved fix ${saved.fixId}. Team confidence is computed by the notebook.`);
           } else ui.line('Not saved: no fix text supplied.');
         }
-      } catch (error) { ui.line(`[errorbook] Assistance unavailable: ${error.message}`); }
+      } catch (error) { ui.warn(`[errorbook] Assistance unavailable: ${error.message}`); }
     } });
-  } catch (error) { ui.line(`[errorbook] ${error.message}`); return 1; }
+  } catch (error) { ui.warn(`[errorbook] ${error.message}`); return 1; }
   finally { prompts.close(); }
 }

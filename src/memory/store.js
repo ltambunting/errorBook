@@ -54,11 +54,17 @@ export function loadAll() {
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.replace(/^\uFEFF/, "").trim(); // Windows editors sometimes add a hidden character
       if (!line) continue;
+      let event;
       try {
-        events.push(JSON.parse(line));
+        event = JSON.parse(line);
       } catch {
-        // one broken line is skipped, never fatal
+        continue; // one broken line is skipped, never fatal
       }
+      // JSON.parse succeeds on "null", "42" and "[]" too, and a null sailing
+      // through here used to take out the whole notebook on the first e.type.
+      // A junk line skips itself, nothing else.
+      if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+      events.push(event);
     }
   }
   return events;

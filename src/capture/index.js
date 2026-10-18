@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { join, dirname, extname, delimiter, isAbsolute } from 'node:path';
+import { localDir } from '../paths.js';
 
 const STDERR_CAP = 64 * 1024;
 const RETRY_WINDOW_MS = 5 * 60 * 1000;
@@ -36,8 +37,10 @@ function createTailBuffer(cap) {
 
 // --- retry counter --------------------------------------------------------
 
+// Shared with the notebook and the explanation cache, so the counter does not
+// scatter when the same command is run from different subdirectories.
 function storePath() {
-  return join(process.cwd(), '.errorbook', 'local', 'retries.json');
+  return join(localDir(), 'retries.json');
 }
 
 function readStore() {
