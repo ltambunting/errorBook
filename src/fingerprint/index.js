@@ -74,13 +74,20 @@ export function scrub(text) {
 
 // Non-file URLs and node: builtin specifiers are already machine-independent,
 // so they are parked while paths are collapsed and restored afterwards.
-const URL_RE = /\b(?!file:)[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)\]]+/gi;
+// `[redacted]` is matched explicitly: scrub() runs before normalize() in the
+// CLI, and without this a scrubbed userinfo would cut the URL short and leave
+// its path to be eaten as a filesystem path.
+const URL_RE = /\b(?!file:)[a-z][a-z0-9+.-]*:\/\/(?:\[redacted\]|[^\s"'<>)\]])+/gi;
 const NODE_SPECIFIER = /\bnode:[a-z][\w/.-]*/gi;
 
 // Windows paths may contain spaces in directory names (C:\Program Files\...),
 // so only the final segment is required to be space-free.
-const WIN_PATH = /(?:file:\/{2,3})?[a-zA-Z]:[\\/](?:[^\\/:*?"<>|\n]*[\\/])*[^\s\\/:*?"<>|\n]*/g;
-const POSIX_PATH = /(?:file:\/\/)?\/(?:[^\s/:*?"<>|\n]+\/)+[^\s/:*?"<>|\n]*/g;
+// Quotes are excluded from the final segment only, so a path printed inside
+// quotes ('/tmp/x/config.json') ends at the file rather than taking the closing
+// quote as its basename -- while a directory with an apostrophe in its name
+// still matches.
+const WIN_PATH = /(?:file:\/{2,3})?[a-zA-Z]:[\\/](?:[^\\/:*?"<>|\n]*[\\/])*[^\s\\/:*?"'`<>|\n]*/g;
+const POSIX_PATH = /(?:file:\/\/)?\/(?:[^\s/:*?"<>|\n]+\/)+[^\s/:*?"'`<>|\n]*/g;
 
 const TEMP_MARKERS = [/\/appdata\/local\/temp\//, /\/windows\/temp\//, /^\/tmp\//, /\/var\/folders\//];
 const HOME_MARKERS = [/^[a-z]:\/users\/[^/]+\//, /^\/users\/[^/]+\//, /^\/home\/[^/]+\//, /^\/root\//];
