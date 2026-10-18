@@ -65,7 +65,13 @@ Credentials are scrubbed before anything is stored, printed or sent anywhere.
 | `ERRORBOOK_AI_MODEL` | Gemini model to use. Default `gemini-3.8-flash`. |
 | `ERRORBOOK_AI_URL` | Overrides the AI endpoint entirely, for a local stub or a proxy. When set, no API key is required. |
 | `ERRORBOOK_DIR` | Where the notebook lives. Default `<repo root>/.errorbook`. |
-| `ERRORBOOK_AUTHOR` | Who you are in the notebook. Default: your `git config user.name`. |
+| `ERRORBOOK_AUTHOR_NAME` | Who you are in the notebook, and how `errorbook sync` signs its commits. Takes precedence over everything below. |
+| `ERRORBOOK_AUTHOR` | The older name for the same thing; still honoured, one rung down. |
+| `ERRORBOOK_AUTHOR_EMAIL` | Email for `errorbook sync` commits. Its local part is also used as your notebook name if nothing above is set. |
+
+Your notebook name is resolved in that order, then `git config user.name`, then
+the local part of `git config user.email`, and only then `someone`. Whatever it
+lands on is slugified, so `Ankit Aggarwal` files notes under `ankit-aggarwal`.
 | `NO_COLOR` | Any non-empty value turns colour off. Colour is also off automatically when output is not a terminal. |
 
 Set the key in your shell, not in a file in the repo:
