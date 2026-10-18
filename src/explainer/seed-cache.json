@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "entries": {
+    "6ce249": {
+      "explanation": "npm cannot find a script named \"build\" in your package.json file. This usually happens if the script has not been defined or if the command was executed in the wrong directory.",
+      "suggestedSteps": [
+        "Open your package.json and verify that a \"build\" command is defined inside the \"scripts\" section, or run \"npm run\" to see the available scripts."
+      ],
+      "caveats": [],
+      "_source": {
+        "label": "npm missing script",
+        "model": "gemini-3.8-flash",
+        "generatedAt": "2026-10-18T05:29:17.779Z",
+        "summary": "npm error missing script: \"build\""
+      }
+    },
+    "28b25a": {
+      "explanation": "The Node.js server failed to start because the port it is trying to bind to is already in use by another running process.",
+      "suggestedSteps": [
+        "Find and stop the existing process occupying that port, or configure your application to use a different port number."
+      ],
+      "caveats": [],
+      "_source": {
+        "label": "port already in use",
+        "model": "gemini-3.8-flash",
+        "generatedAt": "2026-10-18T05:29:48.716Z",
+        "summary": "error: listen eaddrinuse: address already in use :::<n>"
+      }
+    },
+    "fb4768": {
+      "explanation": "Node could not find the package \"express\" that app.mjs imports. The import names a dependency that is not installed in this project, so module resolution fails before any of your code runs.",
+      "suggestedSteps": [
+        "Run \"npm install express\" to add it to package.json and node_modules, then run the command again."
+      ],
+      "caveats": [],
+      "_source": {
+        "label": "module not found",
+        "model": "hand-written",
+        "generatedAt": "2026-10-18T06:10:00.000Z",
+        "summary": "error [err_module_not_found]: cannot find package 'express' imported from ~/app.mjs"
+      }
+    },
+    "b540a5": {
+      "explanation": "Git will not create a commit until it knows who is making it, and no author name or email is configured for this repository. Every commit records an author, so it refuses rather than guess.",
+      "suggestedSteps": [
+        "Set them with \"git config user.name 'Your Name'\" and \"git config user.email you@example.com\", adding --global to apply it to every repository, then commit again."
+      ],
+      "caveats": [],
+      "_source": {
+        "label": "git identity unset",
+        "model": "hand-written",
+        "generatedAt": "2026-10-18T06:10:00.000Z",
+        "summary": "author identity unknown"
+      }
+    }
+  }
+}

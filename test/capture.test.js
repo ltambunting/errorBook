@@ -18,6 +18,11 @@ const FAILING = [
 const sandbox = mkdtempSync(join(tmpdir(), 'errorbook-test-'));
 const origCwd = process.cwd();
 process.chdir(sandbox);
+// The retry counter now resolves its path the same way the notebook does, so
+// ERRORBOOK_DIR wins over the working directory. Changing directory alone is no
+// longer an isolated sandbox: without this, a developer who exports
+// ERRORBOOK_DIR for their own notebook runs this test against it.
+process.env.ERRORBOOK_DIR = join(sandbox, '.errorbook');
 
 // A command whose outcome we can flip, so the same key can fail then succeed.
 writeFileSync('flaky.js', `import { existsSync } from 'node:fs';

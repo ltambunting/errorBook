@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { normalize, fingerprint } from "../src/fingerprint/index.js";
 
 test("normalizes stack traces across machines", () => {
@@ -101,3 +103,97 @@ test("handles an empty string", () => {
     assert.ok("file" in result.loose);
     assert.equal(typeof result.summary, "string");
   });
+// --- summary line ----------------------------------------------------------
+// The first line of a Node trace is the module banner, which tells a reader
+// nothing. The summary should be the line carrying the error's type or code.
+
+test("fb4768: the summary is the ERR_MODULE_NOT_FOUND line, not the node:internal banner", () => {
+  const captured = fs.readFileSync(
+    new URL("../samples/node-module-not-found-ankit.txt", import.meta.url), "utf8");
+  const { id, summary } = fingerprint(captured);
+
+  assert.equal(id, "fb4768", "the id must not move");
+  assert.match(summary, /err_module_not_found/);
+  assert.match(summary, /cannot find package 'express'/);
+  assert.doesNotMatch(summary, /^node:internal/, "the banner is not a summary");
+  assert.doesNotMatch(summary, /^throw /, "nor is the quoted source line");
+  assert.ok(summary.length <= 120);
+});
+
+test("28b25a: the summary is the EADDRINUSE line, not the node:events banner", () => {
+  // The real shape of a second `node server.js` against a taken port.
+  const captured = [
+    "node:events:502",
+    "      throw er; // Unhandled 'error' event",
+    "      ^",
+    "",
+    "Error: listen EADDRINUSE: address already in use :::3000",
+    "    at Server.setupListenHandle [as _listen2] (node:net:1908:16)",
+    "    at listenInCluster (node:net:1965:12)",
+    "    at Server.listen (node:net:2067:7)",
+    "Emitted 'error' event on Server instance at:",
+    "    at emitErrorNT (node:net:1944:8) {",
+    "  code: 'EADDRINUSE',",
+    "  errno: -4091,",
+    "  syscall: 'listen',",
+    "  address: '::',",
+    "  port: 3000",
+    "}",
+    "",
+    "Node.js v22.17.0",
+  ].join("\n");
+  const { loose, summary } = fingerprint(captured);
+
+  assert.equal(loose.errorType, "EADDRINUSE");
+  assert.match(summary, /eaddrinuse/);
+  assert.match(summary, /address already in use/);
+  assert.doesNotMatch(summary, /^node:events/, "the banner is not a summary");
+  assert.doesNotMatch(summary, /^code:/, "nor is the property dump");
+});
+
+test("npm and git summaries are unchanged: the first line was already right", () => {
+  const npm = fingerprint(fs.readFileSync(
+    new URL("../samples/npm-missing-script-ankit.txt", import.meta.url), "utf8"));
+  assert.equal(npm.id, "6ce249");
+  assert.equal(npm.summary, 'npm error missing script: "build"');
+
+  // `fatal` names no particular failure, so it must not outrank the first line.
+  // This is the real shape of the demo's b540a5, git's own suggested commands
+  // included -- they are also what tells detectLang this is git at all.
+  const git = fingerprint([
+    "Author identity unknown",
+    "",
+    "*** Please tell me who you are.",
+    "",
+    "Run",
+    "",
+    '  git config --global user.email "you@example.com"',
+    '  git config --global user.name "Your Name"',
+    "",
+    "to set your account's default identity.",
+    "Omit --global to set the identity only in this repository.",
+    "",
+    "fatal: empty ident name (for <>) not allowed",
+  ].join("\n"));
+  assert.equal(git.loose.errorType, "fatal");
+  assert.equal(git.summary, "author identity unknown");
+});
+
+test("the summary falls back to the first line when nothing stands out", () => {
+  assert.equal(fingerprint("Something went sideways\nand then stopped").summary, "something went sideways");
+  // All noise: the first line is still better than nothing.
+  assert.equal(fingerprint("node:events:1\n    at foo (node:net:1:1)").summary, "node:events:<n>");
+  assert.equal(fingerprint("").summary, null);
+});
+
+test("choosing a summary cannot change an id", () => {
+  // Same normalised text, so same hash, whichever line gets shown.
+  for (const text of [
+    fs.readFileSync(new URL("../samples/node-module-not-found-ankit.txt", import.meta.url), "utf8"),
+    fs.readFileSync(new URL("../samples/npm-missing-script-ankit.txt", import.meta.url), "utf8"),
+  ]) {
+    const { id, summary } = fingerprint(text);
+    assert.equal(id, createHash("sha256").update(normalize(text)).digest("hex").slice(0, 6));
+    assert.equal(normalize(text).includes(summary), true, "the summary is a line of the normalised text");
+  }
+});

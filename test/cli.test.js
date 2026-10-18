@@ -17,6 +17,7 @@ import { createDisplay, relativeTime, displayName } from "../src/cli/display.js"
 import { createPrompts } from "../src/cli/prompts.js";
 import { createExplainer } from "../src/explainer/explainer.js";
 import { append } from "../src/memory/index.js";
+import { validateExplanation } from "../src/explainer/validate.js";
 
 const BIN = fileURLToPath(new URL("../bin/errorbook.js", import.meta.url));
 
@@ -351,7 +352,9 @@ test("control characters in a saved fix cannot drive the terminal", async () => 
 // --- the explainer --------------------------------------------------------
 
 test("the explainer falls back to cache offline, and reports when it cannot", async () => {
-  const event = { errorId: "6ce249", normalizedError: 'npm error missing script: "build"', normalizationVersion: "test-1" };
+  // Deliberately not one of the seeded fingerprints: this test is about the
+  // local cache filling up, so it must start with nothing to find.
+  const event = { errorId: "c0ffee", normalizedError: 'npm error missing script: "build"', normalizationVersion: "test-1" };
   const cacheFile = path.join(dir, "local", "explanation-cache.json");
   const value = { explanation: "No such script.", suggestedSteps: ["Run npm run."], caveats: ["Unconfirmed."] };
 
@@ -370,7 +373,52 @@ test("the explainer falls back to cache offline, and reports when it cannot", as
   }).explain(event, { offline: true });
   assert.equal(cached.status, "ok");
   assert.equal(cached.source, "cache");
+  assert.equal(cached.cacheSource, "local");
   assert.deepEqual(cached.value, value);
+});
+
+test("the committed seed answers the demo's errors with no key and no local cache", async () => {
+  // The whole point of the seed: a fresh clone, offline, still explains these.
+  const cacheFile = path.join(dir, "local", "explanation-cache.json");
+  const explainer = createExplainer({
+    cacheFile,
+    provider: async () => { throw new Error("the provider must not be called"); },
+  });
+
+  for (const errorId of ["6ce249", "fb4768", "28b25a", "b540a5"]) {
+    const r = await explainer.explain(
+      { errorId, normalizedError: `whatever ${errorId} looked like here`, normalizationVersion: "test-1" },
+      { offline: true },
+    );
+    assert.equal(r.status, "ok", `${errorId} is not seeded`);
+    assert.equal(r.cacheSource, "seed", `${errorId} did not come from the seed`);
+    assert.match(r.value.explanation, /\S/);
+    assert.equal(r.value.suggestedSteps.length > 0, true, `${errorId} suggests nothing`);
+  }
+
+  // Keyed on the fingerprint, so it survives being written on another machine,
+  // but an unseeded error still gets nothing.
+  const miss = await explainer.explain(
+    { errorId: "000000", normalizedError: "unknown", normalizationVersion: "test-1" },
+    { offline: true },
+  );
+  assert.equal(miss.status, "unavailable");
+  assert.equal(miss.reason, "offline");
+});
+
+test("the seed cache is well formed and claims its provenance", async () => {
+  const seed = JSON.parse(fs.readFileSync(new URL("../src/explainer/seed-cache.json", import.meta.url), "utf8"));
+  assert.equal(seed.schemaVersion, 1);
+  assert.deepEqual(Object.keys(seed.entries).sort(), ["28b25a", "6ce249", "b540a5", "fb4768"]);
+  for (const [id, entry] of Object.entries(seed.entries)) {
+    assert.doesNotThrow(() => validateExplanation(entry), `${id} is not a valid explanation`);
+    assert.ok(entry._source?.label, `${id} does not say what it is`);
+    assert.ok(entry._source?.model, `${id} does not say where it came from`);
+    // Nothing machine-specific, and above all no credentials, ship in here.
+    const text = JSON.stringify(entry);
+    assert.doesNotMatch(text, /AIza|x-goog-api-key|GEMINI_API_KEY/i, `${id} mentions a key`);
+    assert.doesNotMatch(text, /C:\\\\Users|\/home\/|\/Users\//, `${id} embeds a local path`);
+  }
 });
 
 test("a provider failure is reported, not thrown, and a malformed answer is rejected", async () => {
@@ -397,8 +445,12 @@ test("the AI adapter times out well before the OS does, with an actionable messa
   const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
   const event = { errorId: "a1b2c3", normalizedError: "boom" };
 
-  const unset = await aiAdapter(event, { url: "" }).catch((e) => e);
+  // No endpoint override and no key. The key is passed explicitly rather than
+  // relying on the environment, which may well have a real one exported.
+  const unset = await aiAdapter(event, { url: "", key: "" }).catch((e) => e);
   assert.equal(unset.reason, "not_configured");
+  assert.match(unset.message, /GEMINI_API_KEY/);
+  assert.match(unset.message, /--offline/);
 
   // 10.255.255.1 is unroutable: the OS connect timeout is far longer than ours.
   const started = Date.now();
@@ -582,4 +634,142 @@ test("when every known fix has failed, a new one is worth asking for", async () 
   assert.match(r.prompts.asked.join(" "), /Save a new solution/, "a dead end must be replaceable");
   assert.match(r.stdout, /Saved[.]/);
   assert.equal(notebook().filter((e) => e.type === "solved" && e.fix === "The real fix").length, 1);
+});
+
+// --- the Gemini adapter ----------------------------------------------------
+// Driven against a local stub, so the suite never calls Google and needs no key.
+
+import { createServer } from "node:http";
+import { trimForPrompt } from "../src/explainer/aiAdapter.js";
+
+async function stubGemini(handler) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      seen.push({ headers: req.headers, body: body ? JSON.parse(body) : null });
+      handler(req, res, body);
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${server.address().port}/v1beta/models/x:generateContent`, seen, close: () => new Promise((r) => server.close(r)) };
+}
+const geminiReply = (obj) => (_req, res) => {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] }, finishReason: "STOP" }] }));
+};
+
+test("a Gemini reply is parsed into the shape validate.js expects", async () => {
+  const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
+  const stub = await stubGemini(geminiReply({
+    whatWentWrong: "There is no build script.",
+    whatToTry: "Add one to package.json.",
+  }));
+  try {
+    const out = await aiAdapter({ errorId: "6ce249", normalizedError: "npm error missing script" }, { url: stub.url, key: "test-key-not-real" });
+    assert.deepEqual(out, {
+      explanation: "There is no build script.",
+      suggestedSteps: ["Add one to package.json."],
+      caveats: [],
+    });
+    assert.doesNotThrow(() => validateExplanation(out));
+
+    // The key travels in the header, never in the URL or the body.
+    assert.equal(stub.seen[0].headers["x-goog-api-key"], "test-key-not-real");
+    assert.doesNotMatch(stub.url, /test-key-not-real/);
+    assert.doesNotMatch(JSON.stringify(stub.seen[0].body), /test-key-not-real/);
+
+    // And it asks for JSON back rather than hoping for it.
+    assert.equal(stub.seen[0].body.generationConfig.responseMimeType, "application/json");
+    assert.ok(stub.seen[0].body.systemInstruction.parts[0].text.includes("untrusted data"));
+  } finally {
+    await stub.close();
+  }
+});
+
+test("a thinking part before the answer is skipped", async () => {
+  const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
+  const stub = await stubGemini((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ candidates: [{ content: { parts: [
+      { text: "Let me consider the stack trace...", thought: true },
+      { text: JSON.stringify({ whatWentWrong: "Port is taken.", whatToTry: "Stop the other server." }) },
+    ] } }] }));
+  });
+  try {
+    const out = await aiAdapter({ errorId: "28b25a", normalizedError: "EADDRINUSE" }, { url: stub.url, key: "k" });
+    assert.equal(out.explanation, "Port is taken.");
+  } finally {
+    await stub.close();
+  }
+});
+
+test("a stub that already returns the final shape is left alone", async () => {
+  const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
+  const ready = { explanation: "Already shaped.", suggestedSteps: ["Nothing to map."], caveats: [] };
+  const stub = await stubGemini((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(ready));
+  });
+  try {
+    assert.deepEqual(await aiAdapter({ errorId: "x", normalizedError: "y" }, { url: stub.url, key: "k" }), ready);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("a bad Gemini response is reported, and never quotes the request back", async () => {
+  const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
+  const KEY = "super-secret-test-key";
+
+  const cases = [
+    ["not json at all", (_q, res) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end("<html>nope"); }, "invalid_response"],
+    ["no candidates", geminiReply, "invalid_response"],
+    ["prose instead of json", (_q, res) => { res.writeHead(200); res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I think the build broke." }] } }] })); }, "invalid_response"],
+    ["blocked", (_q, res) => { res.writeHead(200); res.end(JSON.stringify({ promptFeedback: { blockReason: "SAFETY" } })); }, "blocked"],
+    ["http 429", (_q, res) => { res.writeHead(429); res.end(JSON.stringify({ error: { message: `your key ${KEY} is over quota` } })); }, "http_error"],
+    ["http 403", (_q, res) => { res.writeHead(403); res.end(`forbidden for key ${KEY}`); }, "http_error"],
+  ];
+
+  for (const [label, handler, reason] of cases) {
+    const stub = await stubGemini(typeof handler === "function" && handler.length === 2 ? handler : handler({}));
+    try {
+      const e = await aiAdapter({ errorId: "x", normalizedError: "y" }, { url: stub.url, key: KEY }).catch((err) => err);
+      assert.equal(e.reason, reason, `${label}: got ${e.reason} (${e.message})`);
+      // The key must never surface in a message, however the server behaves.
+      assert.doesNotMatch(e.message, new RegExp(KEY), `${label} leaked the key`);
+      assert.doesNotMatch(e.message, /x-goog-api-key/i, `${label} leaked the headers`);
+    } finally {
+      await stub.close();
+    }
+  }
+});
+
+test("a 429 says it is a rate limit, and a 403 points at the key", async () => {
+  const { aiAdapter } = await import("../src/explainer/aiAdapter.js");
+  const stub429 = await stubGemini((_q, res) => { res.writeHead(429); res.end("{}"); });
+  const stub403 = await stubGemini((_q, res) => { res.writeHead(403); res.end("{}"); });
+  try {
+    const a = await aiAdapter({ errorId: "x", normalizedError: "y" }, { url: stub429.url, key: "k" }).catch((e) => e);
+    assert.match(a.message, /rate limited/);
+    const b = await aiAdapter({ errorId: "x", normalizedError: "y" }, { url: stub403.url, key: "k" }).catch((e) => e);
+    assert.match(b.message, /GEMINI_API_KEY is valid/);
+  } finally {
+    await stub429.close();
+    await stub403.close();
+  }
+});
+
+test("a huge stderr is trimmed at both ends before being sent", () => {
+  const short = "Error: small\n    at x";
+  assert.equal(trimForPrompt(short), short, "a normal error is sent whole");
+
+  const huge = "HEAD-MARKER\n" + "    at repeated (frame.js:1:1)\n".repeat(5000) + "TAIL-MARKER";
+  const sent = trimForPrompt(huge);
+  assert.ok(sent.length < 4200, `trimmed to ${sent.length}`);
+  assert.match(sent, /HEAD-MARKER/, "the error line at the top survives");
+  assert.match(sent, /TAIL-MARKER/, "and the fatal line at the bottom");
+  assert.match(sent, /characters of repeated frames omitted/);
+  assert.equal(trimForPrompt(undefined), "");
 });

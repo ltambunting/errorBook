@@ -5,8 +5,9 @@ export function createExplainer({cacheFile,provider=aiAdapter}) {
   const cache=createCache(cacheFile);
   return {async explain(event,{offline=false}={}){
     if (!event?.errorId || !event.normalizedError || !event.normalizationVersion) return {status:'unavailable',reason:'invalid_input',message:'A fingerprinted error context is required.'};
+    // Either cache counts as 'cache' to the display; `cacheSource` says which.
     const saved=await cache.get(event);
-    if(saved)try{return {status:'ok',source:'cache',value:validateExplanation(saved)};}catch{}
+    if(saved)try{return {status:'ok',source:'cache',cacheSource:saved.from,value:validateExplanation(saved.value)};}catch{}
     if(offline)return {status:'unavailable',reason:'offline',message:'Offline mode is enabled and no cached explanation is available.'};
     try {
       const raw=await provider(event);let value;

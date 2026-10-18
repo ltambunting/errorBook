@@ -255,6 +255,49 @@ function detectFile(raw) {
   return null;
 }
 
+// --- summary --------------------------------------------------------------
+
+// Lines that are never worth showing: stack frames, the module path banner Node
+// prints above a trace, the caret, the `throw` source line it quotes, and the
+// property dump after it. `node:internal/modules/package_json_reader:<n>` being
+// the first line is exactly the case this exists for.
+const SUMMARY_NOISE =
+  /^(?:at\b|async\b|node:[a-z]|\^+$|throw\b|[{}[\]]|emitted\b|code:|errno:|syscall:|address:|port:|require stack:|-\s)/;
+
+// `fatal`, `error` and the like name no particular failure, so a line carrying
+// one of them is no better than the first line.
+const GENERIC_TYPE = /^(?:fatal|error|err|warning|warn)$/i;
+
+// Tried in order when the error type is unknown or too generic to search for.
+// Matched against the normalised text, which is lower case by then.
+const SUMMARY_SIGNALS = [
+  /\berr_[a-z0-9_]+\b/,
+  /\be(?:addrinuse|addrnotavail|acces|again|busy|conn(?:aborted|refused|reset)|exist|isdir|mfile|net(?:down|reset|unreach)|nodev|noent|nospc|notdir|notempty|notfound|perm|pipe|proto|timedout)\b/,
+  /\bcannot find (?:package|module)\b/,
+  /\baddress already in use\b/,
+  /\bpermission denied\b/,
+];
+
+// The line a person would actually read. Prefers the line carrying the error's
+// type or code over a stack frame, and falls back to the first line, which is
+// already the right one for an npm or git failure.
+function pickSummary(normalized, errorType) {
+  const lines = normalized.split('\n');
+  const first = lines[0] ?? '';
+  const pool = lines.filter((line) => line !== '' && !SUMMARY_NOISE.test(line));
+  if (pool.length === 0) return first.slice(0, SUMMARY_MAX);
+
+  if (errorType && !GENERIC_TYPE.test(errorType)) {
+    const hit = pool.find((line) => line.includes(errorType.toLowerCase()));
+    if (hit) return hit.slice(0, SUMMARY_MAX);
+  }
+  for (const signal of SUMMARY_SIGNALS) {
+    const hit = pool.find((line) => signal.test(line));
+    if (hit) return hit.slice(0, SUMMARY_MAX);
+  }
+  return first.slice(0, SUMMARY_MAX);
+}
+
 // --- fingerprint ----------------------------------------------------------
 
 /**
@@ -270,13 +313,16 @@ export function fingerprint(stderr) {
   }
 
   const lang = detectLang(raw);
-  const summary = normalized.split('\n')[0].slice(0, SUMMARY_MAX);
+  const errorType = detectErrorType(raw, lang);
+  // Chosen from the normalised text, which is what gets hashed, so the summary
+  // can never affect the id.
+  const summary = pickSummary(normalized, errorType);
 
   return {
     id: createHash('sha256').update(normalized).digest('hex').slice(0, ID_LENGTH),
     loose: {
       lang,
-      errorType: detectErrorType(raw, lang),
+      errorType,
       file: detectFile(raw),
     },
     summary: summary === '' ? null : summary,
