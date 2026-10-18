@@ -1,2 +1,4 @@
 node_modules/
 .errorbook/local/
+
+.DS_Store
