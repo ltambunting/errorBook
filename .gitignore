@@ -4,3 +4,5 @@ node_modules/
 # The demo's generated project, including its own throwaway git repo.
 # demo/template/ and the reset scripts are the source of truth.
 demo/project/
+
+.env

@@ -276,6 +276,7 @@ var ErrorbookStats = (function () {
         // What the brief asked to rank by: how often it bites, times how many
         // people it bites. An error that hits one person five times and one
         // that hits five people once are not the same problem.
+        //
         score: err.occurrences * people.length,
       };
     }).sort(function (a, b) {
