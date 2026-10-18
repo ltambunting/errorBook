@@ -14,6 +14,40 @@ import { runLookup } from '../lookup/index.js';
 import { runSuggest } from '../suggest/index.js';
 import { runMcp } from '../mcp/index.js';
 
+// One auto-confirm per fix per person: somebody who has already voted on this
+// fix by hand is not asked again through the back door, and nobody's silence
+// gets counted twice.
+function hasVoted(book, author, fixId) {
+  try {
+    return book.loadAll().some(e => e?.fixId === fixId && e.author === author && (e.type === 'confirmed' || e.type === 'rejected'));
+  } catch { return false; }
+}
+
+// The fix a developer was shown last time and said nothing about, and the
+// evidence that it worked: the same command, run again, exiting 0 inside the
+// window. The vote goes through the ordinary append path, so it counts exactly
+// like one somebody typed -- the only difference is that nobody had to.
+//
+// Everything here is best-effort. The command the developer ran has already
+// succeeded, so a notebook that cannot be read or written changes nothing but
+// this courtesy.
+async function autoConfirm(book, ui, pending) {
+  try {
+    if (!pending) return;
+    const expired = book.isPendingExpired?.(pending) ?? true;
+    book.dropPending?.(pending.command); // consumed either way: one chance per entry
+    if (expired) return;
+    const author = book.me();
+    if (author !== pending.author) return; // a different person's silence proves nothing
+    const result = await book.lookup(pending.fingerprint);
+    const fix = [result.fix, ...result.alternatives].find(f => f?.fixId === pending.fixId);
+    if (!fix || fix.author === author) return; // withdrawn, or your own fix after all
+    if (hasVoted(book, author, pending.fixId)) return;
+    await book.append({ type: 'confirmed', fingerprint: pending.fingerprint, fixId: pending.fixId, author });
+    ui.line(`Recorded: the fix for ${pending.fingerprint} appears to have worked.`);
+  } catch { /* never speak up, and never fail, on a command that passed */ }
+}
+
 export async function runCli(args, deps = {}) {
   const ui = deps.ui ?? createDisplay(), prompts = deps.prompts ?? createPrompts();
   const book = deps.memory ?? memory, capture = deps.capture ?? runCommand;
@@ -59,8 +93,16 @@ export async function runCli(args, deps = {}) {
     }
     if (argv[0] === '--') argv.shift();
     if (!argv.length) throw new Error('errorbook run: no command given');
-    return await capture(argv, { onFailure: async report => {
+    // Read before the run: if this command was shown a fix last time and
+    // nobody voted, how it exits now is the vote.
+    const command = argv.join(' ');
+    const pending = (() => { try { return book.readPending?.(command) ?? null; } catch { return null; } })();
+    const exitCode = await capture(argv, { onFailure: async report => {
       try {
+        // It failed again, so the fix it was given did not work -- but a
+        // silent retry is not a rejection either, so the entry is dropped and
+        // nothing is recorded.
+        try { book.dropPending?.(command); } catch { /* advisory */ }
         const event = contextFromFailure(report);
         ui.line(`\n[errorbook] Command failed with exit code ${report.exitCode} (${report.durationMs}ms)`);
         if (repeated(report.command)) ui.line('[errorbook] This command has failed 3+ times in the last 5 minutes.');
@@ -91,6 +133,7 @@ export async function runCli(args, deps = {}) {
           // One question per failure. A new fix is only worth asking about when
           // every fix the team already has is known to have failed.
           offerSave = fixes.every(f => f.confidence === 'failed');
+          let answered = false; // did the developer say what happened?
           if (prompts.interactive) {
             const selection = fixes.length === 1 ? '1' : await prompts.ask('Select a solution number (Enter to skip): ');
             const chosen = fixes[Number(selection)-1];
@@ -98,6 +141,7 @@ export async function runCli(args, deps = {}) {
               const answer = (await prompts.ask('After trying this fix: worked [y], failed [n], error returned [r], Enter to skip: ')).toLowerCase();
               const type = {y:'confirmed',yes:'confirmed',n:'rejected',no:'rejected',r:'returned'}[answer];
               if (type) {
+                answered = true;
                 const author = book.me();
                 if (type === 'confirmed' && author === chosen.author) ui.line('You cannot confirm your own fix. Another teammate must verify it.');
                 else {
@@ -108,6 +152,17 @@ export async function runCli(args, deps = {}) {
                   ui.line(`Recorded ${type}.`); if (saved) ui.fixes([saved],{verbose});
                 }
               }
+            }
+          }
+          // Nobody said what happened to an exact match, so the next run of
+          // this exact command gets to answer instead. Exact only: a loose
+          // match's fix belongs to another error, so a passing command says
+          // nothing about it. Only the top-ranked fix -- the one the terminal
+          // led with -- and never one's own.
+          if (result.kind === 'exact' && !answered && prompts.interactive) {
+            const author = book.me(), top = fixes[0];
+            if (top && top.author !== author && !hasVoted(book, author, top.fixId)) {
+              try { book.savePending?.({ command, fingerprint: top.fingerprint, fixId: top.fixId, author }); } catch { /* advisory */ }
             }
           }
         } else {
@@ -123,6 +178,8 @@ export async function runCli(args, deps = {}) {
         }
       } catch (error) { ui.warn(`[errorbook] Assistance unavailable: ${error.message}`); }
     } });
+    if (exitCode === 0) await autoConfirm(book, ui, pending);
+    return exitCode;
   } catch (error) { ui.warn(`[errorbook] ${error.message}`); return 1; }
   finally { prompts.close(); }
 }
