@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>errorbook - team memory</title>
+<style>
+  :root {
+    --bg: #11131a; --panel: #1a1d27; --line: #2b3040;
+    --ink: #e7e9ee; --dim: #9aa1b4; --accent: #5fd3bc;
+    --warn: #e8b84b; --bad: #e8705f; --good: #5fd3bc;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f7f9; --panel: #fff; --line: #e2e5ec;
+      --ink: #1b1e26; --dim: #636a7b; --accent: #0f8a74;
+      --warn: #a06c00; --bad: #c0392b; --good: #0f8a74;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 16px 72px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim); margin: 36px 0 12px; font-weight: 600; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  header .meta { color: var(--dim); font-size: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+
+  /* the one big number */
+  .hero { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; padding: 26px 28px; margin-top: 22px; }
+  .hero .pct { font-size: 76px; line-height: .95; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .hero .label { font-size: 15px; font-weight: 600; }
+  .hero .explain { color: var(--dim); font-size: 13px; max-width: 52ch; margin-top: 4px; }
+  .bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: 14px; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-weight: 600; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  code { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 1px 5px; border-radius: 4px; }
+
+  details.err { border-bottom: 1px solid var(--line); }
+  details.err:last-child { border-bottom: 0; }
+  details.err > summary { cursor: pointer; padding: 13px 16px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+  details.err > summary::-webkit-details-marker { display: none; }
+  details.err > summary::before { content: "+"; color: var(--dim); width: 12px; flex: none; font-family: ui-monospace, monospace; }
+  details.err[open] > summary::before { content: "-"; }
+  details.err .sum { flex: 1 1 22ch; min-width: 0; overflow-wrap: anywhere; }
+  .body { padding: 2px 16px 18px 42px; }
+  .fix { border-left: 2px solid var(--line); padding: 2px 0 2px 14px; margin: 14px 0; }
+  .fix .what { overflow-wrap: anywhere; }
+  .fix .who { color: var(--dim); font-size: 13px; margin-top: 3px; }
+  .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; border: 1px solid currentColor; border-radius: 99px; padding: 1px 7px; white-space: nowrap; }
+  .c-high, .c-medium { color: var(--good); }
+  .c-unproven { color: var(--dim); }
+  .c-low { color: var(--warn); }
+  .c-failed { color: var(--bad); }
+
+  /* timeline */
+  .days { display: flex; gap: 5px; align-items: flex-end; padding: 20px 16px 8px; min-height: 130px; }
+  .day { flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; min-width: 0; }
+  .day i { display: block; border-radius: 2px 2px 0 0; background: var(--accent); }
+  .day i.miss { background: var(--bad); }
+  .day b { font-weight: 400; color: var(--dim); font-size: 10px; text-align: center; white-space: nowrap; overflow: hidden; }
+  .legend { display: flex; gap: 18px; color: var(--dim); font-size: 12px; padding: 0 16px 16px; }
+  .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; background: var(--accent); }
+  .legend span.m::before { background: var(--bad); }
+
+  .empty { padding: 40px 28px; }
+  .empty p { color: var(--dim); max-width: 64ch; }
+  .empty input { margin-top: 10px; }
+  footer { color: var(--dim); font-size: 12px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>errorbook <span style="color:var(--dim);font-weight:400">team memory</span></h1>
+    <div class="meta" id="meta"></div>
+  </header>
+  <div id="app"></div>
+  <footer id="foot"></footer>
+</div>
+
+<!-- Replaced by `errorbook dashboard` with the team's notebook. Left empty, the
+     page offers a file picker instead, so this file still works on its own. -->
+<script type="application/json" id="errorbook-data">null</script>
+
+<!-- The whole of the arithmetic, deliberately free of the DOM so it can be
+     tested in Node: test/dashboard.test.js lifts this block out of the page by
+     its id and evaluates it. There is no second copy of these rules anywhere. -->
+<script id="errorbook-stats">
+var ErrorbookStats = (function () {
+  'use strict';
+
+  var DAY = 86400000;
+  var VOTES = { confirmed: 1, rejected: 1, returned: 1 };
+
+  function isEvent(e) {
+    return e && typeof e === 'object' && !Array.isArray(e) && typeof e.fingerprint === 'string';
+  }
+
+  // Oldest first. A stable sort keeps same-instant events in file order.
+  function chronological(events) {
+    return events.filter(isEvent).slice().sort(function (a, b) {
+      return String(a.ts).localeCompare(String(b.ts));
+    });
+  }
+
+  function firstName(author) {
+    return String(author == null ? '' : author).split('-')[0] || 'someone';
+  }
+
+  // The notebook records what people did, not what they looked up, so a hit has
+  // to be inferred: the FIRST time an error is solved, nobody had the answer --
+  // that is a miss, and the time in timeToSolve is what it cost. Every later
+  // encounter with that same error (another person solving it, or anyone
+  // confirming, rejecting or reporting it came back) happened with an answer
+  // already sitting in the notebook, so it counts as a hit.
+  function hitRate(events) {
+    var seen = {}, hits = 0, misses = 0;
+    chronological(events).forEach(function (e) {
+      if (e.type !== 'solved' && !VOTES[e.type]) return;
+      if (seen[e.fingerprint]) hits++;
+      else { misses++; seen[e.fingerprint] = true; }
+    });
+    var total = hits + misses;
+    return {
+      hits: hits,
+      misses: misses,
+      total: total,
+      // No data is not 0%: say so rather than implying the team never hits.
+      percent: total === 0 ? null : Math.round((hits / total) * 100),
+    };
+  }
+
+  // One entry per fingerprint: its fixes, its votes, and what it has cost.
+  function byError(events) {
+    var order = chronological(events);
+    var errors = {};
+
+    function error(id) {
+      if (!errors[id]) {
+        errors[id] = {
+          fingerprint: id, summary: '', loose: null, fixes: {}, fixOrder: [],
+          people: {}, occurrences: 0, secondsLost: 0, firstSeen: null, lastSeen: null,
+        };
+      }
+      return errors[id];
+    }
+
+    order.forEach(function (e) {
+      if (e.type !== 'solved' && !VOTES[e.type]) return;
+      var err = error(e.fingerprint);
+      err.occurrences++;
+      if (e.author) err.people[e.author] = true;
+      if (!err.firstSeen) err.firstSeen = e.ts;
+      err.lastSeen = e.ts;
+
+      if (e.type === 'solved') {
+        if (e.summary && !err.summary) err.summary = e.summary;
+        if (e.loose && !err.loose) err.loose = e.loose;
+        if (typeof e.timeToSolve === 'number' && isFinite(e.timeToSolve) && e.timeToSolve > 0) {
+          err.secondsLost += e.timeToSolve;
+        }
+        if (!err.fixes[e.fixId]) {
+          err.fixes[e.fixId] = {
+            fixId: e.fixId, fix: e.fix, author: e.author, ts: e.ts,
+            timeToSolve: typeof e.timeToSolve === 'number' ? e.timeToSolve : null,
+            confirmedBy: [], rejectedBy: [], returnedAt: [],
+          };
+          err.fixOrder.push(e.fixId);
+        }
+        return;
+      }
+
+      var fix = err.fixes[e.fixId];
+      if (!fix) return; // a vote for a fix this notebook has not pulled yet
+      // One vote per person, their latest replacing an earlier one, matching
+      // how the notebook itself counts.
+      var drop = function (list) {
+        var i = list.indexOf(e.author);
+        if (i > -1) list.splice(i, 1);
+      };
+      if (e.type === 'confirmed') {
+        if (e.author === fix.author) return; // nobody confirms their own fix
+        drop(fix.rejectedBy);
+        if (fix.confirmedBy.indexOf(e.author) < 0) fix.confirmedBy.push(e.author);
+      } else if (e.type === 'rejected') {
+        drop(fix.confirmedBy);
+        if (fix.rejectedBy.indexOf(e.author) < 0) fix.rejectedBy.push(e.author);
+      } else if (e.type === 'returned') {
+        fix.returnedAt.push(e.ts);
+      }
+    });
+
+    // The notebook's own confidence table.
+    function confidence(ups, downs, returned) {
+      if (returned || downs >= 2) return 'failed';
+      if (downs > ups) return 'low';
+      if (ups === 0 && downs === 0) return 'unproven';
+      if (downs === 0) return ups >= 2 ? 'high' : 'medium';
+      return ups > downs ? 'medium' : 'unproven';
+    }
+    var RANK = { high: 0, medium: 1, unproven: 2, low: 3, failed: 4 };
+
+    return Object.keys(errors).map(function (id) {
+      var err = errors[id];
+      var fixes = err.fixOrder.map(function (fixId) {
+        var fix = err.fixes[fixId];
+        var lastUp = fix.confirmedBy.length ? fix.ts : null;
+        var returned = fix.returnedAt.some(function (ts) { return ts > (lastUp || fix.ts); });
+        return {
+          fixId: fix.fixId, fix: fix.fix, author: fix.author, ts: fix.ts,
+          timeToSolve: fix.timeToSolve,
+          confirmedBy: fix.confirmedBy.slice(), rejectedBy: fix.rejectedBy.slice(),
+          returned: returned,
+          confidence: confidence(fix.confirmedBy.length, fix.rejectedBy.length, returned),
+        };
+      }).sort(function (a, b) {
+        return RANK[a.confidence] - RANK[b.confidence] ||
+          (b.confirmedBy.length - b.rejectedBy.length) - (a.confirmedBy.length - a.rejectedBy.length) ||
+          String(b.ts).localeCompare(String(a.ts));
+      });
+
+      var people = Object.keys(err.people);
+      return {
+        fingerprint: err.fingerprint,
+        summary: err.summary,
+        loose: err.loose,
+        fixes: fixes,
+        people: people,
+        peopleAffected: people.length,
+        occurrences: err.occurrences,
+        hoursLost: Math.round((err.secondsLost / 3600) * 10) / 10,
+        returned: fixes.some(function (f) { return f.returned; }),
+        firstSeen: err.firstSeen,
+        lastSeen: err.lastSeen,
+        // What the brief asked to rank by: how often it bites, times how many
+        // people it bites. An error that hits one person five times and one
+        // that hits five people once are not the same problem.
+        score: err.occurrences * people.length,
+      };
+    }).sort(function (a, b) {
+      return b.score - a.score || b.hoursLost - a.hoursLost ||
+        String(a.fingerprint).localeCompare(String(b.fingerprint));
+    });
+  }
+
+  // One bucket per day for the last `days` days, oldest first, each split into
+  // the encounters that had an answer and the ones that did not.
+  function timeline(events, now, days) {
+    days = days || 14;
+    var end = new Date(now);
+    end.setHours(0, 0, 0, 0);
+    var start = end.getTime() - (days - 1) * DAY;
+
+    var buckets = [];
+    for (var i = 0; i < days; i++) {
+      var at = new Date(start + i * DAY);
+      buckets.push({ date: at.toISOString().slice(0, 10), day: at.getDate(), hits: 0, misses: 0, total: 0 });
+    }
+    var index = {};
+    buckets.forEach(function (b, i) { index[b.date] = i; });
+
+    var seen = {};
+    chronological(events).forEach(function (e) {
+      if (e.type !== 'solved' && !VOTES[e.type]) return;
+      var hit = !!seen[e.fingerprint];
+      seen[e.fingerprint] = true;
+      var when = new Date(Date.parse(e.ts));
+      if (isNaN(when)) return;
+      // Bucket by the author's local day, which is how the date reads to them.
+      var key = new Date(when.getTime() - when.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      var at = index[key];
+      if (at === undefined) return; // older than the window
+      buckets[at].total++;
+      if (hit) buckets[at].hits++; else buckets[at].misses++;
+    });
+    return buckets;
+  }
+
+  function summarise(events, now, days) {
+    var list = Array.isArray(events) ? events : [];
+    var errors = byError(list);
+    var people = {};
+    list.filter(isEvent).forEach(function (e) { if (e.author) people[e.author] = true; });
+    return {
+      hitRate: hitRate(list),
+      errors: errors,
+      timeline: timeline(list, now || Date.now(), days),
+      people: Object.keys(people).sort(),
+      totalHoursLost: Math.round(errors.reduce(function (sum, e) { return sum + e.hoursLost; }, 0) * 10) / 10,
+    };
+  }
+
+  return {
+    summarise: summarise, hitRate: hitRate, byError: byError,
+    timeline: timeline, firstName: firstName, chronological: chronological,
+  };
+})();
+</script>
+
+<!-- The renderer. Lifted out by id in test/dashboard.test.js too, and run
+     against a minimal DOM, so a typo here fails the suite rather than the demo. -->
+<script id="errorbook-render">
+(function () {
+  'use strict';
+  var S = ErrorbookStats;
+  var app = document.getElementById('app');
+  var meta = document.getElementById('meta');
+  var foot = document.getElementById('foot');
+
+  function el(tag, attrs, kids) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) {
+      if (k === 'class') node.className = attrs[k];
+      else if (k === 'text') node.textContent = attrs[k];
+      else if (k === 'style') node.setAttribute('style', attrs[k]);
+      else node.setAttribute(k, attrs[k]);
+    });
+    (kids || []).forEach(function (kid) { if (kid) node.appendChild(kid); });
+    return node;
+  }
+  var txt = function (s) { return document.createTextNode(String(s)); };
+
+  function ago(iso) {
+    var then = Date.parse(iso);
+    if (!isFinite(then)) return '';
+    var secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+    var units = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
+    for (var i = 0; i < units.length; i++) {
+      if (secs >= units[i][1]) {
+        var n = Math.floor(secs / units[i][1]);
+        return n + ' ' + units[i][0] + (n === 1 ? '' : 's') + ' ago';
+      }
+    }
+    return 'just now';
+  }
+  var names = function (list) { return list.map(S.firstName).join(', '); };
+
+  function heroPanel(rate) {
+    var pct = rate.percent === null ? '--' : rate.percent + '%';
+    var detail = rate.total === 0
+      ? 'Nothing recorded yet.'
+      : rate.hits + ' of ' + rate.total + ' encounters had an answer waiting. ' +
+        rate.misses + ' did not, and someone had to work it out.';
+    return el('div', { class: 'panel hero' }, [
+      el('div', { class: 'pct', text: pct }),
+      el('div', {}, [
+        el('div', { class: 'label', text: 'answered from the team notebook' }),
+        el('div', { class: 'explain', text: detail }),
+        el('div', { class: 'explain', text: 'The first time an error is solved nobody had the answer; every later encounter with it did. That is what this measures.' }),
+        el('div', { class: 'bar' }, [el('span', { style: 'width:' + (rate.percent || 0) + '%' })]),
+      ]),
+    ]);
+  }
+
+  function topTable(errors) {
+    var head = el('tr', {}, [
+      el('th', { text: 'error' }), el('th', { text: 'type' }),
+      el('th', { class: 'num', text: 'times' }), el('th', { class: 'num', text: 'people' }),
+      el('th', { class: 'num', text: 'score' }), el('th', { class: 'num', text: 'hours lost' }),
+    ]);
+    var rows = errors.map(function (e) {
+      return el('tr', {}, [
+        el('td', {}, [el('code', { text: e.fingerprint }), txt(' '), txt(e.summary || '')]),
+        el('td', { text: (e.loose && e.loose.errorType) || (e.loose && e.loose.lang) || '-' }),
+        el('td', { class: 'num', text: e.occurrences }),
+        el('td', { class: 'num', text: e.peopleAffected }),
+        el('td', { class: 'num', text: e.score }),
+        el('td', { class: 'num', text: e.hoursLost ? e.hoursLost.toFixed(1) : '-' }),
+      ]);
+    });
+    return el('div', { class: 'panel' }, [el('table', {}, [el('thead', {}, [head]), el('tbody', {}, rows)])]);
+  }
+
+  function errorDetail(e) {
+    var fixes = e.fixes.map(function (f) {
+      var who = 'solved by ' + S.firstName(f.author) + ' ' + ago(f.ts);
+      if (f.timeToSolve) who += ' - took ' + Math.round(f.timeToSolve / 60) + ' min';
+      if (f.confirmedBy.length) who += ' - confirmed by ' + names(f.confirmedBy);
+      if (f.rejectedBy.length) who += ' - rejected by ' + names(f.rejectedBy);
+      if (f.returned) who += ' - the error came back';
+      return el('div', { class: 'fix' }, [
+        el('div', { class: 'what' }, [el('span', { class: 'tag c-' + f.confidence, text: f.confidence }), txt(' '), txt(f.fix || '')]),
+        el('div', { class: 'who', text: who }),
+      ]);
+    });
+    return el('details', { class: 'err' }, [
+      el('summary', {}, [
+        el('code', { text: e.fingerprint }),
+        el('span', { class: 'sum', text: e.summary || '(no summary)' }),
+        el('span', { class: 'tag c-' + (e.fixes[0] ? e.fixes[0].confidence : 'unproven'), text: e.fixes.length + (e.fixes.length === 1 ? ' fix' : ' fixes') }),
+      ]),
+      el('div', { class: 'body' }, [el('div', { class: 'who', style: 'color:var(--dim);font-size:13px', text: 'hit ' + e.occurrences + ' times, ' + e.peopleAffected + ' ' + (e.peopleAffected === 1 ? 'person' : 'people') + ' (' + names(e.people) + ')' })].concat(fixes)),
+    ]);
+  }
+
+  function timelinePanel(days) {
+    var peak = Math.max.apply(null, days.map(function (d) { return d.total; }).concat([1]));
+    var bars = days.map(function (d) {
+      var h = function (n) { return Math.round((n / peak) * 92); };
+      return el('div', { class: 'day', title: d.date + ': ' + d.total + ' (' + d.hits + ' answered, ' + d.misses + ' not)' }, [
+        d.hits ? el('i', { style: 'height:' + Math.max(3, h(d.hits)) + 'px' }) : null,
+        d.misses ? el('i', { class: 'miss', style: 'height:' + Math.max(3, h(d.misses)) + 'px' }) : null,
+        el('b', { text: d.day }),
+      ]);
+    });
+    return el('div', { class: 'panel' }, [
+      el('div', { class: 'days' }, bars),
+      el('div', { class: 'legend' }, [
+        el('span', { text: 'answered from the notebook' }),
+        el('span', { class: 'm', text: 'nobody had it yet' }),
+      ]),
+    ]);
+  }
+
+  function render(payload) {
+    var stats = S.summarise(payload.events, Date.now(), 14);
+    app.textContent = '';
+    meta.textContent = stats.people.length
+      ? stats.people.map(S.firstName).join(', ') + ' - ' + stats.errors.length +
+        (stats.errors.length === 1 ? ' error' : ' errors') + ' - ' + stats.totalHoursLost.toFixed(1) + ' hours lost'
+      : '';
+
+    app.appendChild(heroPanel(stats.hitRate));
+    if (stats.errors.length) {
+      app.appendChild(el('h2', { text: 'top errors, by how often times how many' }));
+      app.appendChild(topTable(stats.errors));
+      app.appendChild(el('h2', { text: 'every error, in detail' }));
+      app.appendChild(el('div', { class: 'panel' }, stats.errors.map(errorDetail)));
+    }
+    app.appendChild(el('h2', { text: 'the last two weeks' }));
+    app.appendChild(timelinePanel(stats.timeline));
+
+    foot.textContent = payload.notebook
+      ? 'Read from ' + payload.notebook + (payload.generatedAt ? ' at ' + new Date(payload.generatedAt).toLocaleString() : '')
+      : 'Loaded in the browser.';
+  }
+
+  // Standing on its own, with no data embedded, the page cannot read the
+  // notebook: a file:// page is not allowed to fetch sibling files. So it asks
+  // for them instead, and `errorbook dashboard` is the one-command path.
+  function askForFiles() {
+    var input = el('input', { type: 'file', multiple: 'multiple', accept: '.jsonl' });
+    input.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(input.files || []);
+      if (!files.length) return;
+      Promise.all(files.map(function (f) { return f.text(); })).then(function (texts) {
+        var events = [];
+        texts.join('\n').split(/\r?\n/).forEach(function (line) {
+          var t = line.replace(/^﻿/, '').trim();
+          if (!t) return;
+          try {
+            var parsed = JSON.parse(t);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) events.push(parsed);
+          } catch (err) { /* one broken line is skipped, never fatal */ }
+        });
+        render({ events: events, notebook: files.length + ' file(s) you picked' });
+      });
+    });
+    app.appendChild(el('div', { class: 'panel empty' }, [
+      el('p', { text: 'No notebook is embedded in this file.' }),
+      el('p', { text: 'Run "errorbook dashboard" to write a copy with your team\'s data already inside, and open it. Or pick your .errorbook/*.jsonl files here:' }),
+      input,
+    ]));
+  }
+
+  var raw = document.getElementById('errorbook-data').textContent;
+  var payload = null;
+  try { payload = JSON.parse(raw); } catch (err) { payload = null; }
+  if (payload && payload.events && payload.events.length) render(payload);
+  else askForFiles();
+})();
+</script>
+</body>
+</html>

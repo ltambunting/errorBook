@@ -13,7 +13,7 @@ import { Writable, PassThrough } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { runCli } from "../src/cli/cli.js";
-import { createDisplay } from "../src/cli/display.js";
+import { createDisplay, relativeTime, displayName } from "../src/cli/display.js";
 import { createPrompts } from "../src/cli/prompts.js";
 import { createExplainer } from "../src/explainer/explainer.js";
 import { append } from "../src/memory/index.js";
@@ -112,7 +112,9 @@ test("an unknown error is reported, explained, and can be saved", async () => {
   assert.match(r.stdout, /ERRORBOOK 6ce249/);
   assert.match(r.stdout, /This error is not in the notebook yet/);
   assert.equal(r.explainer.calls, 1, "the explainer is asked only when nothing is known");
-  assert.match(r.stdout, /Saved fix/);
+  assert.match(r.stdout, /Saved[.] Run errorbook sync to share it[.]/);
+  assert.doesNotMatch(r.stdout, /Team confidence/, "no internal detail");
+  assert.doesNotMatch(r.stdout, /Saved fix/, "the fixId stays behind --verbose");
 
   const saved = notebook();
   assert.equal(saved.length, 1);
@@ -139,7 +141,7 @@ test("the same error again is an exact match, and the AI is not asked", async ()
   await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
 
   const r = await run(["run", "npm", "run", "build"], { prompts: scripted("", "n") });
-  assert.match(r.stdout, /Exact match - 1 solution/);
+  assert.match(r.stdout, /Known error - found in [0-9]+ms/);
   assert.match(r.stdout, /1\. Add a build script to package\.json/);
   assert.match(r.stdout, /confidence: unproven/);
   assert.equal(r.explainer.calls, 0, "a known error needs no AI explanation");
@@ -153,7 +155,7 @@ test("a different missing script loose-matches the saved fix", async () => {
     prompts: scripted("", "n"),
   });
   assert.match(r.stdout, /ERRORBOOK e73c44/, "a different script is a different fingerprint");
-  assert.match(r.stdout, /Similar error - 1 solution/);
+  assert.match(r.stdout, /Similar error - found in [0-9]+ms/);
   assert.match(r.stdout, /Add a build script to package\.json/);
   assert.match(r.stdout, /not an exact match/);
   assert.equal(r.explainer.calls, 0);
@@ -168,7 +170,7 @@ test("a teammate's confirmation is recorded and raises confidence", async () => 
   const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "n") });
 
   assert.match(r.stdout, /Recorded confirmed/);
-  assert.match(r.stdout, /confirmed 1 times/);
+  assert.match(r.stdout, /confirmed 1 - rejected 0/);
   assert.match(r.stdout, /confidence: medium/);
   const votes = notebook().filter((e) => e.type === "confirmed");
   assert.equal(votes.length, 1);
@@ -182,7 +184,7 @@ test("you cannot confirm your own fix, and nothing is written", async () => {
   const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "n") });
   assert.match(r.stdout, /cannot confirm your own fix/);
   assert.equal(notebook().filter((e) => e.type === "confirmed").length, 0, "the self-vote is refused, not stored");
-  assert.match(r.stdout, /confirmed 0 times/);
+  assert.match(r.stdout, /confirmed 0 - rejected 0/);
 });
 
 test("a rejection is recorded against a loose match's own fingerprint", async () => {
@@ -205,7 +207,8 @@ test("list shows saved fixes without claiming a match kind", async () => {
   assert.equal(r.code, 0);
   assert.match(r.stdout, /Fingerprint: 6ce249/);
   assert.match(r.stdout, /1\. Add a build script to package\.json/);
-  assert.doesNotMatch(r.stdout, /Exact match/, "a listing is not a match");
+  assert.doesNotMatch(r.stdout, /Known error/, "a listing is not a match");
+  assert.doesNotMatch(r.stdout, /found in/, "no lookup time in a listing");
   assert.doesNotMatch(r.stdout, /Similar error/);
 });
 
@@ -261,7 +264,7 @@ test("a bare null line skips itself instead of taking out the notebook", async (
   assert.doesNotMatch(listed.stderr, /Cannot read properties/);
 
   const looked = await run(["run", "npm", "run", "build"], { prompts: scripted("", "n") });
-  assert.match(looked.stdout, /Exact match/, "lookup survives it too");
+  assert.match(looked.stdout, /Known error/, "lookup survives it too");
   assert.doesNotMatch(looked.stderr, /Assistance unavailable/);
 });
 
@@ -309,7 +312,7 @@ test("a multi-line fix stays indented under its own number", async () => {
   createDisplay(ui.out, ui.err).fixes([
     { fix: "Add a build script:\n  \"build\": \"tsc\"\nthen reinstall", author: "ankit", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "abc" },
     { fix: "Second solution", author: "louis", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "def" },
-  ], "exact");
+  ], { kind: "exact" });
 
   const lines = ui.stdout().split("\n");
   const numbered = lines.filter((l) => /^\d+\. /.test(l));
@@ -325,7 +328,7 @@ test("colour follows the TTY and NO_COLOR", async () => {
     const before = process.env.NO_COLOR;
     if (noColor === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = noColor;
     const ui = sink(isTTY);
-    createDisplay(ui.out, ui.err).fixes(fixture, "exact");
+    createDisplay(ui.out, ui.err).fixes(fixture, { kind: "exact" });
     if (before === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = before;
     return /\x1b\[/.test(ui.stdout());
   };
@@ -339,7 +342,7 @@ test("control characters in a saved fix cannot drive the terminal", async () => 
   const ui = sink();
   createDisplay(ui.out, ui.err).fixes([
     { fix: "\x1b[31mred\x1b[0m\x1b[2J\roverwrite", author: "a", confirmations: 0, rejections: 0, returned: false, confidence: "unproven", fixId: "i" },
-  ], "exact");
+  ], { kind: "exact" });
   const out = ui.stdout().replace(/\x1b\[36;1m|\x1b\[0m\n/g, ""); // the heading's own colour
   assert.doesNotMatch(out, /\x1b/, "no escape characters survive from notebook text");
   assert.doesNotMatch(out, /\r/);
@@ -464,4 +467,119 @@ test("sync outside a git repo bails before touching anything", () => {
   assert.match(out.stdout, /isn't a git repository/);
   assert.equal(fs.existsSync(path.join(plain, ".errorbook", ".gitattributes")), false, "nothing is written");
   fs.rmSync(plain, { recursive: true, force: true });
+});
+
+// --- the demo-facing output ------------------------------------------------
+
+test("relativeTime reads as a person would say it", () => {
+  const now = Date.parse("2026-10-18T12:00:00Z");
+  const ago = (iso) => relativeTime(iso, now);
+  assert.equal(ago("2026-10-18T11:59:30Z"), "just now");
+  assert.equal(ago("2026-10-18T11:58:00Z"), "2 minutes ago");
+  assert.equal(ago("2026-10-18T11:00:00Z"), "1 hour ago");
+  assert.equal(ago("2026-10-17T12:00:00Z"), "1 day ago");
+  assert.equal(ago("2026-10-04T12:00:00Z"), "2 weeks ago");
+  assert.equal(ago("2026-08-18T12:00:00Z"), "2 months ago");
+  assert.equal(ago("2024-10-18T12:00:00Z"), "2 years ago");
+  // A teammate's clock can run ahead of ours; that is not "-1 minutes ago".
+  assert.equal(ago("2026-10-18T12:05:00Z"), "just now");
+  assert.equal(relativeTime(undefined, now), null, "a missing timestamp shows nothing");
+  assert.equal(relativeTime("not a date", now), null);
+});
+
+test("an author slug is shown as a first name, but stored whole", async () => {
+  assert.equal(displayName("ankit-aggarwal"), "ankit");
+  assert.equal(displayName("louisa-tambunting"), "louisa");
+  assert.equal(displayName("ankit"), "ankit");
+  assert.equal(displayName(""), "someone");
+  assert.equal(displayName(null), "someone");
+
+  process.env.ERRORBOOK_AUTHOR = "Ankit Aggarwal";
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  assert.match(r.stdout, /Saved[.]/);
+  assert.equal(notebook()[0].author, "ankit-aggarwal", "storage keeps the full slug");
+
+  const listed = await run(["list"]);
+  assert.match(listed.stdout, /fixed by ankit -/);
+  assert.doesNotMatch(listed.stdout, /ankit-aggarwal/, "the slug is not shown to a reader");
+});
+
+test("the match heading carries the lookup time", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("") });
+  const heading = r.stdout.split("\n").find((l) => l.startsWith("Known error"));
+  assert.ok(heading, `no heading in ${JSON.stringify(r.stdout)}`);
+  assert.match(heading, /^Known error - found in [0-9]+ms$/);
+});
+
+test("a fix shows when it was found, and not its fixId", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("") });
+  assert.match(r.stdout, /fixed by ankit - just now/);
+  assert.doesNotMatch(r.stdout, /fix [0-9a-f]{8}/, "the fixId means nothing to a reader");
+  assert.doesNotMatch(r.stdout, /Language: npm/, "the loose description is verbose-only");
+});
+
+test("--verbose restores the loose description and the fixId", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const r = await run(["run", "--verbose", "npm", "run", "build"], { prompts: scripted("") });
+  assert.match(r.stdout, /Language: npm - type: missing-script - file: -/);
+  assert.match(r.stdout, /- fix [0-9a-f]{8}/);
+
+  const listed = await run(["list", "--verbose"]);
+  assert.match(listed.stdout, /- fix [0-9a-f]{8}/);
+});
+
+test("--offline and --verbose combine, in either order", async () => {
+  for (const flags of [["--offline", "--verbose"], ["--verbose", "--offline"]]) {
+    const r = await run(["run", ...flags, "npm", "run", "build"], { prompts: scripted("n") });
+    assert.equal(r.explainer.offline, true, `offline lost with ${flags.join(" ")}`);
+    assert.match(r.stdout, /Language: npm/, `verbose lost with ${flags.join(" ")}`);
+  }
+});
+
+test("a loose match warns before it advises, not after", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const r = await run(["run", "npm", "run", "doesnotexist"], {
+    capture: failsWith(NPM_OTHER),
+    prompts: scripted(""),
+  });
+  const caveat = r.stdout.indexOf("not an exact match");
+  const fix = r.stdout.indexOf("1. Add a build script");
+  assert.ok(caveat > -1 && fix > -1, "both lines are present");
+  assert.ok(caveat < fix, "the caveat must be read before the fix, not after it");
+});
+
+test("a known error asks one question, not two", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+
+  // Skipping the verdict used to be followed by "Save a new solution?".
+  const skipped = await run(["run", "npm", "run", "build"], { prompts: scripted("") });
+  assert.equal(skipped.prompts.asked.length, 1, `asked ${JSON.stringify(skipped.prompts.asked)}`);
+  assert.doesNotMatch(skipped.prompts.asked.join(" "), /Save a new solution/);
+
+  // Answering it is also one question (one fix, so no "which one" step).
+  process.env.ERRORBOOK_AUTHOR = "louis";
+  const answered = await run(["run", "npm", "run", "build"], { prompts: scripted("y") });
+  assert.equal(answered.prompts.asked.length, 1);
+  assert.match(answered.stdout, /Recorded confirmed/);
+});
+
+test("when every known fix has failed, a new one is worth asking for", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "A dead end") });
+  const solved = notebook()[0];
+  // Two different people reject it, which the confidence table calls "failed".
+  // The votes have to be dated after the fix they are about, or the notebook
+  // rightly ignores them as votes for something it has not seen yet.
+  const later = new Date(Date.parse(solved.ts) + 60_000).toISOString();
+  for (const author of ["louis", "mara"]) {
+    fs.appendFileSync(path.join(dir, `${author}.jsonl`),
+      JSON.stringify({ v: 1, type: "rejected", fingerprint: "6ce249", fixId: solved.fixId, author, ts: later }) + "\n");
+  }
+
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("", "y", "The real fix") });
+  assert.match(r.stdout, /confidence: failed - confirmed 0 - rejected 2/);
+  assert.match(r.prompts.asked.join(" "), /Save a new solution/, "a dead end must be replaceable");
+  assert.match(r.stdout, /Saved[.]/);
+  assert.equal(notebook().filter((e) => e.type === "solved" && e.fix === "The real fix").length, 1);
 });

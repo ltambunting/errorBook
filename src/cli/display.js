@@ -1,6 +1,39 @@
 // All output is plain ASCII and left-aligned: no box drawing, no column
 // padding, nothing that assumes a terminal width. Long lines are left to the
 // terminal to soft-wrap, which reads correctly however narrow it is.
+
+// Whole days, so "a year ago" is 365 days rather than an averaged 365.25 that
+// renders two calendar years as "1 year ago".
+const UNITS = [
+  ['year', 365 * 86400],
+  ['month', 30 * 86400],
+  ['week', 7 * 86400],
+  ['day', 86400],
+  ['hour', 3600],
+  ['minute', 60],
+];
+
+// "2 minutes ago". A timestamp written on a teammate's machine can be slightly
+// ahead of ours, so the future reads as "just now" rather than "-1 minutes".
+export function relativeTime(iso, now = Date.now()) {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return null;
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  for (const [name, size] of UNITS) {
+    if (seconds >= size) {
+      const n = Math.floor(seconds / size);
+      return `${n} ${name}${n === 1 ? '' : 's'} ago`;
+    }
+  }
+  return 'just now';
+}
+
+// Storage keeps the slug that names the file ("ankit-aggarwal"); a reader only
+// needs the first part of it.
+export function displayName(author) {
+  return String(author ?? '').split('-')[0] || 'someone';
+}
+
 export function createDisplay(output = process.stdout, errors = process.stderr) {
   const colors = output.isTTY && !process.env.NO_COLOR;
   // Strip control characters so a fix saved by a teammate cannot recolour the
@@ -19,14 +52,24 @@ export function createDisplay(output = process.stdout, errors = process.stderr) 
     line,
     warn,
     error(event) { heading(`\nERRORBOOK ${event.errorId}`); line(event.summary || event.normalizedError); },
-    // `kind` omitted means "no match to report" (errorbook list), so the
-    // exact/similar heading is left off entirely.
-    fixes(fixes,kind=null) {
-      if (kind) heading(`\n${kind==='loose'?'Similar error':'Exact match'} - ${fixes.length} solution${fixes.length===1?'':'s'}`);
+    // The headline of the whole demo: that the answer came from the team's
+    // notebook, and how long that took. `kind` omitted means "not a match"
+    // (errorbook list), so no heading is claimed at all.
+    fixes(fixes, { kind = null, lookupMs = null, verbose = false, now = Date.now() } = {}) {
+      if (kind) {
+        const found = lookupMs === null ? '' : ` - found in ${lookupMs}ms`;
+        heading(`\n${kind === 'loose' ? 'Similar error' : 'Known error'}${found}`);
+      }
       fixes.forEach((fix,i)=>{
         line(`${i+1}. ${hang(fix.fix,'   ')}`);
-        line(`   fixed by ${fix.author} - confirmed ${fix.confirmations} times - rejected ${fix.rejections} times`);
-        line(`   confidence: ${fix.confidence}${fix.returned?' - error returned':''} - fix ${fix.fixId}`);
+        const when = relativeTime(fix.firstSeen, now);
+        line(`   fixed by ${displayName(fix.author)}${when ? ` - ${when}` : ''}`);
+        line(
+          `   confidence: ${fix.confidence}` +
+          ` - confirmed ${fix.confirmations} - rejected ${fix.rejections}` +
+          `${fix.returned ? ' - error returned' : ''}` +
+          `${verbose ? ` - fix ${fix.fixId}` : ''}`,
+        );
       });
     },
     explanation(result) {
