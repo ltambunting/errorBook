@@ -1,0 +1,34 @@
+[
+  {
+    "v": 1,
+    "type": "solved",
+    "fingerprint": "f53c40",
+    "loose": {
+      "lang": "unknown",
+      "errorType": "TypeError",
+      "file": null
+    },
+    "summary": "typeerror: cannot read properties of null (reading 'map')",
+    "raw": "TypeError: Cannot read properties of null (reading 'map')",
+    "fix": "Default to an empty array with (users ?? []).map(...).",
+    "fixId": "cf55f927",
+    "author": "priya",
+    "ts": "2026-10-17T10:00:00Z"
+  },
+  {
+    "v": 1,
+    "type": "confirmed",
+    "fingerprint": "f53c40",
+    "fixId": "cf55f927",
+    "author": "alex",
+    "ts": "2026-10-17T11:00:00Z"
+  },
+  {
+    "v": 1,
+    "type": "confirmed",
+    "fingerprint": "f53c40",
+    "fixId": "cf55f927",
+    "author": "morgan",
+    "ts": "2026-10-17T11:00:00Z"
+  }
+]

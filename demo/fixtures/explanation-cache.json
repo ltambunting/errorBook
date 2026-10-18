@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "entries": {
+    "dd549f9a91b4cd3db72dd48f9ba6269549433606c9844fe885b42a3acf8a9867": {
+      "explanation": "The parser received an empty string or incomplete JSON.",
+      "suggestedSteps": [
+        "Inspect the string passed to JSON.parse.",
+        "Provide complete JSON or handle an empty response separately."
+      ],
+      "caveats": [
+        "Prepared demo content, not a live AI response."
+      ]
+    }
+  }
+}
