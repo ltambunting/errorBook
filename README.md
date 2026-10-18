@@ -50,6 +50,12 @@ errorbook run --verbose <cmd>      # fingerprint internals and fix ids
 errorbook list                     # every fix the notebook holds
 errorbook sync                     # share and collect, through git
 errorbook dashboard                # hit rate, top errors, hours lost
+errorbook doctor                   # check the setup this project needs
+errorbook scan                     # report notebook lines that look like secrets
+errorbook digest [--days N]        # the dashboard's numbers as markdown
+errorbook lookup [--json]          # ask the notebook about a pasted error
+errorbook suggest                  # errors hitting 2+ people, and what to change
+errorbook mcp                      # serve the notebook to a coding agent
 ```
 
 ## Two laptops
@@ -79,6 +85,30 @@ readable on purpose, since the git identity error is one we explain. Notebook
 text is stripped of control characters before display, so a fix written by
 someone else cannot recolour your terminal or clear the screen.
 
+## Use with a coding agent
+`errorbook mcp` serves the notebook to any MCP client over stdio, read-only:
+one tool, `errorbook_lookup`, that takes `error_text` and answers with the fix
+a teammate recorded. The agent consults what your team already solved instead
+of guessing from scratch.
+
+Add `.mcp.json` at the project root (Claude Code and other MCP clients read it):
+```json
+{
+  "mcpServers": {
+    "errorbook": {
+      "command": "errorbook",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+Without `npm link`, use `"command": "node"` with `"args": ["bin/errorbook.js", "mcp"]`.
+
+The server never appends to the notebook, never calls the AI, and writes
+nothing to disk; `stdout` carries protocol messages only, logs go to `stderr`.
+It reads the same `.errorbook/` the CLI does, so `errorbook sync` is still what
+shares fixes between people.
+
 ## Honest limits
 - Developed and tested on Windows only; nothing is platform-specific by design, but no other OS has been run.
 - The dashboard's hit rate is derived from the notebook, not measured: the first solve of an error counts as a miss, every later encounter as a hit. The page says so too.
@@ -86,4 +116,5 @@ someone else cannot recolour your terminal or clear the screen.
 - `errorbook sync` touches only `.errorbook/`, and resolves to the nearest enclosing git repository, so run it from the project you mean.
 
 ## Tests
-`npm test` runs six suites with no network and no API key: capture, fingerprint, memory, normalize, cli, dashboard.
+`npm test` runs every suite with no network and no API key: capture, fingerprint,
+memory, normalize, cli, dashboard, doctor, scan, digest, lookup, suggest, mcp.

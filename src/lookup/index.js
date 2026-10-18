@@ -14,6 +14,7 @@
 // produced; the ranking is the notebook's own.
 import nodeFs from 'node:fs';
 import { contextFromFailure } from '../explainer/context.js';
+import { scrub } from '../fingerprint/index.js';
 import * as memory from '../memory/index.js';
 import { createDisplay, relativeTime } from '../cli/display.js';
 
@@ -30,7 +31,9 @@ export function jsonFix(fix, now = Date.now()) {
   return {
     fixId: ascii(fix.fixId),
     fingerprint: ascii(fix.fingerprint),
-    fix: ascii(fix.fix),
+    // The store masks a fix when it is saved, but an older line predates a
+    // rule, so it is masked again on the way out.
+    fix: ascii(scrub(fix.fix)),
     author: ascii(fix.author),
     firstSeen: ascii(fix.firstSeen),
     age: relativeTime(fix.firstSeen, now),
@@ -74,35 +77,52 @@ export function readInput({ text, stdin = process.stdin, fs = nodeFs } = {}) {
   }
 }
 
-export function runLookup(deps = {}) {
-  const ui = deps.ui ?? createDisplay();
-  const book = deps.memory ?? memory;
-  const now = deps.now ?? Date.now();
-  const { json, text: fromArgs } = parseArgs(deps.argv ?? []);
-  const input = deps.text ?? readInput({ text: fromArgs, stdin: deps.stdin, fs: deps.fs });
-
+// The notebook's answer to one piece of error text, as data. This is the whole
+// query path -- scrub and fingerprint via contextFromFailure, then the
+// notebook's own lookup -- and every caller goes through it: the command below
+// prints what it returns, and the MCP server serialises it. Returns null when
+// the text holds nothing to fingerprint.
+export function answer(text, { memory: book = memory, now = Date.now() } = {}) {
   // contextFromFailure scrubs the text first, then fingerprints it; it returns
   // null when there is nothing in there to fingerprint.
-  const event = input.trim() ? contextFromFailure({ stderr: input }) : null;
-  if (!event) {
-    ui.warn('errorbook lookup: no error text. Pipe it in, or pass it as arguments.');
-    return 1;
-  }
+  const event = String(text ?? '').trim() ? contextFromFailure({ stderr: text }) : null;
+  if (!event) return null;
 
   const result = book.lookup(event.errorId, event.loose);
   // kind can be "exact" with no fix when an error has votes but no saved fix
   // yet; that is a miss to anyone asking this question.
-  const found = result.kind !== 'none' && result.fix;
-  const fixes = found ? [result.fix, ...result.alternatives] : [];
-
-  if (json) {
-    ui.line(JSON.stringify({
+  const found = result.kind !== 'none' && Boolean(result.fix);
+  return {
+    event,
+    found,
+    kind: found ? result.kind : 'none',
+    fixes: found ? [result.fix, ...result.alternatives] : [],
+    // Exactly the document `lookup --json` prints.
+    json: {
       kind: found ? result.kind : 'none',
       errorId: ascii(event.errorId),
       summary: ascii(event.summary),
       fix: found ? jsonFix(result.fix, now) : null,
       alternatives: result.alternatives.map((fix) => jsonFix(fix, now)),
-    }, null, 2));
+    },
+  };
+}
+
+export function runLookup(deps = {}) {
+  const ui = deps.ui ?? createDisplay();
+  const now = deps.now ?? Date.now();
+  const { json, text: fromArgs } = parseArgs(deps.argv ?? []);
+  const input = deps.text ?? readInput({ text: fromArgs, stdin: deps.stdin, fs: deps.fs });
+
+  const found_ = answer(input, { memory: deps.memory ?? memory, now });
+  if (!found_) {
+    ui.warn('errorbook lookup: no error text. Pipe it in, or pass it as arguments.');
+    return 1;
+  }
+  const { event, found, kind, fixes } = found_;
+
+  if (json) {
+    ui.line(JSON.stringify(found_.json, null, 2));
     return found ? 0 : 1;
   }
 
@@ -112,7 +132,7 @@ export function runLookup(deps = {}) {
     return 1;
   }
   // The caveat goes before the fix, so it is read first.
-  if (result.kind === 'loose') ui.line('\nThis is a similar error, not an exact match. Verify that the solution applies.');
-  ui.fixes(fixes, { kind: result.kind, now });
+  if (kind === 'loose') ui.line('\nThis is a similar error, not an exact match. Verify that the solution applies.');
+  ui.fixes(fixes, { kind, now });
   return 0;
 }
