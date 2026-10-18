@@ -1,3 +1,0 @@
-{"v":1,"type":"lookup","fingerprint":"6ce249","result":"miss","author":"sujin-kim","ts":"2026-10-18T16:59:35.173Z"}
-{"v":1,"type":"lookup","fingerprint":"6ce249","result":"miss","author":"sujin-kim","ts":"2026-10-18T17:00:46.766Z"}
-{"v":1,"type":"solved","fingerprint":"6ce249","loose":{"lang":"npm","errorType":"missing-script","file":null},"summary":"npm error missing script: \"build\"","raw":"npm error Missing script: \"build\"\nnpm error\nnpm error To see a list of scripts, run:\nnpm error   npm run\nnpm error A complete log of this run can be found in: /Users/sujin/.npm/_logs/2026-10-18T17_00_46_524Z-debug-0.log\n","fix":"added \"build\": \"npm run\" to package.json","author":"sujin-kim","ts":"2026-10-18T17:01:50.921Z","fixId":"e51b6d08"}
