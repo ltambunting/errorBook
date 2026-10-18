@@ -169,6 +169,25 @@ test("the order and the counts are summarise()'s, highest score first", () => {
   assert.ok(expected[0].score > expected[1].score, "the worst one really is first");
 });
 
+test("lookup events change neither the filter nor the order", () => {
+  const events = [...MISSING_SCRIPT, ...MODULE_MISSING, ...SOLO];
+  // A lookup is not a person affected, so an error that only one person met
+  // cannot be promoted into the list by anyone looking it up.
+  const noisy = events.concat([
+    { v: 1, type: "lookup", fingerprint: "20116d", result: "hit", author: "louisa-tambunting", ts: daysAgo(1) },
+    { v: 1, type: "lookup", fingerprint: "20116d", result: "hit", author: "mara", ts: daysAgo(1) },
+    { v: 1, type: "lookup", fingerprint: "ffffff", result: "miss", author: "mara", ts: daysAgo(1) },
+  ]);
+
+  assert.deepEqual(
+    recurring(noisy, { now: NOW }).map((e) => [e.fingerprint, e.occurrences, e.peopleAffected, e.score]),
+    recurring(events, { now: NOW }).map((e) => [e.fingerprint, e.occurrences, e.peopleAffected, e.score]),
+  );
+  const md = report(noisy);
+  assert.equal(md, report(events), "the report is unchanged");
+  assert.ok(!md.includes("ffffff"), "an error nobody solved is not a suggestion");
+});
+
 // --- what each entry prints -----------------------------------------------
 
 test("each entry prints the fingerprint, the summary, the saved fix and one recommendation", () => {

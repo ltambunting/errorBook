@@ -116,6 +116,12 @@ async function run(args, over = {}) {
 const notebook = () => fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
   .flatMap((f) => fs.readFileSync(path.join(dir, f), "utf8").split("\n").filter(Boolean).map(JSON.parse));
 
+// `run` records one lookup line per failing command whatever the developer then
+// does, so the two kinds are read apart: `notes` is what a person chose to save
+// or vote on, `lookups` is the measurement.
+const notes = () => notebook().filter((e) => e.type !== "lookup");
+const lookups = () => notebook().filter((e) => e.type === "lookup");
+
 // --- the failure flow -----------------------------------------------------
 
 test("an unknown error is reported, explained, and can be saved", async () => {
@@ -131,7 +137,7 @@ test("an unknown error is reported, explained, and can be saved", async () => {
   assert.doesNotMatch(r.stdout, /Team confidence/, "no internal detail");
   assert.doesNotMatch(r.stdout, /Saved fix/, "the fixId stays behind --verbose");
 
-  const saved = notebook();
+  const saved = notes();
   assert.equal(saved.length, 1);
   assert.equal(saved[0].type, "solved");
   assert.equal(saved[0].fingerprint, "6ce249");
@@ -142,13 +148,13 @@ test("an unknown error is reported, explained, and can be saved", async () => {
 
 test("declining the save prompt writes nothing", async () => {
   const r = await run(["run", "npm", "run", "build"], { prompts: scripted("n") });
-  assert.equal(notebook().length, 0);
+  assert.equal(notes().length, 0);
   assert.doesNotMatch(r.stdout, /Saved fix/);
 });
 
 test("answering the save prompt with empty text writes nothing", async () => {
   const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "") });
-  assert.equal(notebook().length, 0);
+  assert.equal(notes().length, 0);
   assert.match(r.stdout, /Not saved: no fix text supplied/);
 });
 
@@ -233,6 +239,85 @@ test("list on an empty notebook says so", async () => {
   assert.match(r.stdout, /No saved fixes yet/);
 });
 
+// --- measured lookups ------------------------------------------------------
+// The hit rate used to be inferred from what people saved. These cases pin down
+// the line that makes it a measurement instead: written by `run` on every
+// failing command, carrying nothing but the outcome, and written by nothing
+// else -- `lookup` and the read-only reports must stay able to answer a
+// question without changing the answer.
+
+test("a miss is recorded as a miss", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("n") });
+  assert.deepEqual(lookups().map((e) => [e.type, e.fingerprint, e.result, e.author]),
+    [["lookup", "6ce249", "miss", "ankit"]]);
+});
+
+test("an exact match is recorded as a hit", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  assert.deepEqual(lookups().map((e) => e.result), ["miss"], "the first time nobody had it");
+
+  await run(["run", "npm", "run", "build"], { prompts: scripted("", "n") });
+  assert.deepEqual(lookups().map((e) => e.result), ["miss", "hit"], "the second time the notebook did");
+});
+
+test("a similar match is recorded as loose, not as a hit", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const r = await run(["run", "npm", "run", "doesnotexist"], {
+    capture: failsWith(NPM_OTHER),
+    prompts: scripted("", "n"),
+  });
+  assert.match(r.stdout, /similar error, not an exact match/, "which is what the terminal said");
+
+  const seen = lookups();
+  assert.deepEqual(seen.map((e) => e.result), ["miss", "loose"]);
+  // The loose line is filed under the error that was actually hit, not under
+  // the older error whose fix was offered.
+  assert.equal(seen[1].fingerprint, "e73c44");
+});
+
+test("the recorded result is the one the terminal showed", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const r = await run(["run", "npm", "run", "build"], { prompts: scripted("", "n") });
+  const result = lookups().pop().result;
+  assert.equal(result, "hit");
+  assert.match(r.stdout, /Known error - found in [0-9]+ms/);
+  assert.doesNotMatch(r.stdout, /not in the notebook yet/, "a recorded hit is never printed as a miss");
+});
+
+test("a lookup line holds no error text and no fix text", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script to package.json") });
+  const line = lookups()[0];
+  assert.deepEqual(Object.keys(line).sort(), ["author", "fingerprint", "result", "ts", "type", "v"]);
+
+  // Nothing from the captured failure, and nothing from the fix that followed,
+  // appears anywhere in the line -- not in a field we forgot, not in the text.
+  const text = JSON.stringify(line);
+  for (const leak of ["npm", "Missing script", "build", "package.json", "/project"]) {
+    assert.doesNotMatch(text, new RegExp(leak, "i"), `a lookup line leaked ${leak}`);
+  }
+});
+
+test("only run records a lookup: the read-only commands record nothing", async () => {
+  await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
+  const before = lookups().length;
+  assert.equal(before, 1);
+
+  await run(["lookup", "npm", "error", "Missing", "script:", '"build"']);
+  await run(["lookup", "--json", "npm", "error", "Missing", "script:", '"build"']);
+  await run(["list"]);
+  await run(["list", "--verbose"]);
+  await run(["digest"]);
+  await run(["suggest"]);
+  await run(["scan"]);
+  await run(["dashboard", "--no-open"]);
+  assert.equal(lookups().length, before, "asking a question must not change the measurement");
+});
+
+test("a failure with no fingerprint records no lookup", async () => {
+  await run(["run", "node", "x.js"], { capture: failsWith("", 3) });
+  assert.equal(lookups().length, 0, "there is nothing to key a lookup on");
+});
+
 // --- degraded inputs -------------------------------------------------------
 
 test("a failure with no stderr skips lookup instead of throwing", async () => {
@@ -262,7 +347,7 @@ test("piped stdin is lookup-only: no prompts, nothing written", async () => {
     });
     assert.match(ui.stdout(), /ERRORBOOK 6ce249/, "the lookup still runs");
     assert.doesNotMatch(ui.stdout(), /Save a new solution/, "but nothing is asked");
-    assert.equal(notebook().length, 0);
+    assert.equal(notes().length, 0, "a lookup-only run saves no fix and casts no vote");
   })();
 });
 
@@ -569,7 +654,7 @@ test("an author slug is shown as a first name, but stored whole", async () => {
   process.env.ERRORBOOK_AUTHOR = "Ankit Aggarwal";
   const r = await run(["run", "npm", "run", "build"], { prompts: scripted("y", "Add a build script") });
   assert.match(r.stdout, /Saved[.]/);
-  assert.equal(notebook()[0].author, "ankit-aggarwal", "storage keeps the full slug");
+  assert.equal(notes()[0].author, "ankit-aggarwal", "storage keeps the full slug");
 
   const listed = await run(["list"]);
   assert.match(listed.stdout, /fixed by ankit -/);
@@ -639,7 +724,7 @@ test("a known error asks one question, not two", async () => {
 
 test("when every known fix has failed, a new one is worth asking for", async () => {
   await run(["run", "npm", "run", "build"], { prompts: scripted("y", "A dead end") });
-  const solved = notebook()[0];
+  const solved = notes()[0];
   // Two different people reject it, which the confidence table calls "failed".
   // The votes have to be dated after the fix they are about, or the notebook
   // rightly ignores them as votes for something it has not seen yet.
@@ -653,7 +738,7 @@ test("when every known fix has failed, a new one is worth asking for", async () 
   assert.match(r.stdout, /confidence: failed - confirmed 0 - rejected 2/);
   assert.match(r.prompts.asked.join(" "), /Save a new solution/, "a dead end must be replaceable");
   assert.match(r.stdout, /Saved[.]/);
-  assert.equal(notebook().filter((e) => e.type === "solved" && e.fix === "The real fix").length, 1);
+  assert.equal(notes().filter((e) => e.type === "solved" && e.fix === "The real fix").length, 1);
 });
 
 // --- the Gemini adapter ----------------------------------------------------

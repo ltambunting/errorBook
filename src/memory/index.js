@@ -3,7 +3,7 @@ import { loadAll } from "./store.js";
 import { groupByError } from "./tally.js";
 import { pick } from "./rank.js";
 
-export { append, loadAll, me, makeFixId } from "./store.js";
+export { append, appendLookup, loadAll, me, makeFixId, LOOKUP_RESULTS } from "./store.js";
 export { scrub } from "../fingerprint/index.js";
 
 // Two loose descriptions match if they're the same kind of error in the same

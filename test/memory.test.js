@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { append, loadAll, lookup, me, scrub } from "../src/memory/index.js";
+import { append, appendLookup, loadAll, lookup, me, scrub } from "../src/memory/index.js";
 import { cleanName } from "../src/memory/store.js";
 import { confidence } from "../src/memory/tally.js";
 import { fingerprint } from "../src/fingerprint/index.js";
@@ -234,4 +234,83 @@ test("with no git name at all, me() uses the email local part, then gives up", (
     const got = run({ ERRORBOOK_AUTHOR_NAME: name });
     assert.notEqual(got, "someone", `${JSON.stringify(name)} resolved to "someone"`);
   }
+});
+
+// --- measured lookups ------------------------------------------------------
+// A lookup line says the notebook was asked something and how it answered. It
+// is the only event type written without anyone deciding to write it, so what
+// it may contain is pinned down here, and so is its complete absence of effect
+// on the answers.
+
+test("appendLookup writes the whole line and nothing else", () => {
+  const line = appendLookup("6ce249", "hit");
+  assert.deepEqual(Object.keys(line).sort(), ["author", "fingerprint", "result", "ts", "type", "v"]);
+  assert.equal(line.v, 1);
+  assert.equal(line.type, "lookup");
+  assert.equal(line.fingerprint, "6ce249");
+  assert.equal(line.result, "hit");
+  assert.ok(Date.parse(line.ts), "a lookup is dated, so a window can hold it");
+
+  // No error text, no fix text, no command, no file, no loose description.
+  for (const field of ["raw", "fix", "fixId", "summary", "loose", "command", "argv", "cwd", "stderr"]) {
+    assert.equal(field in line, false, `a lookup line must not carry ${field}`);
+  }
+});
+
+test("appendLookup takes the three results and refuses anything else", () => {
+  for (const result of ["hit", "loose", "miss"]) {
+    assert.equal(appendLookup("6ce249", result).result, result);
+  }
+  for (const junk of [undefined, null, "", "HIT", "maybe", 1, {}]) {
+    assert.equal(appendLookup("6ce249", junk), null, `${JSON.stringify(junk)} is not a result`);
+  }
+  for (const id of [undefined, null, "", 42, {}]) {
+    assert.equal(appendLookup(id, "hit"), null, "a lookup without a fingerprint is not recorded");
+  }
+  assert.equal(loadAll().filter((e) => e.type === "lookup").length, 3, "only the three valid ones landed");
+});
+
+test("a lookup that cannot be written is not an error", () => {
+  // A notebook folder that is really a file: mkdirSync and appendFileSync both
+  // fail. The command the developer actually ran must still finish.
+  const blocked = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "eb-")), "notebook");
+  fs.writeFileSync(blocked, "not a folder\n");
+  const previous = process.env.ERRORBOOK_DIR;
+  process.env.ERRORBOOK_DIR = blocked;
+  try {
+    assert.equal(appendLookup("6ce249", "miss"), null);
+  } finally {
+    process.env.ERRORBOOK_DIR = previous;
+  }
+});
+
+test("lookup events change no confidence, no vote and no ranking", () => {
+  writeStarter();
+  const before = lookup("6ce249");
+
+  // Every kind of lookup, by everyone, over and over.
+  for (const author of ["ankit", "louisa", "louis", "mara"]) {
+    for (const result of ["hit", "loose", "miss"]) {
+      append({ type: "lookup", fingerprint: "6ce249", result, author });
+    }
+  }
+  // Including malformed ones that a hand-edit or an older version might leave:
+  // a lookup line carrying a fixId is still not a vote.
+  append({ type: "lookup", fingerprint: "6ce249", fixId: "84282f50", result: "hit", author: "mara" });
+
+  const after = lookup("6ce249");
+  assert.equal(after.kind, before.kind);
+  assert.deepEqual(
+    [after.fix, ...after.alternatives].map((f) => [f.fixId, f.confidence, f.confirmations, f.rejections, f.returned]),
+    [before.fix, ...before.alternatives].map((f) => [f.fixId, f.confidence, f.confirmations, f.rejections, f.returned]),
+  );
+  assert.equal(after.fix.confidence, "medium", "one confirmation from someone else, unmoved by any number of lookups");
+});
+
+test("a lookup for an error nobody has solved is still only a lookup", () => {
+  appendLookup("ffffff", "miss");
+  const result = lookup("ffffff");
+  assert.equal(result.kind, "none");
+  assert.equal(result.fix, null);
+  assert.deepEqual(result.alternatives, []);
 });

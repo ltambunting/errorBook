@@ -100,6 +100,11 @@ var ErrorbookStats = (function () {
 
   var DAY = 86400000;
   var VOTES = { confirmed: 1, rejected: 1, returned: 1 };
+  // A lookup line is a question the notebook was asked, not work anyone did, so
+  // it is never an encounter, an occurrence or a vote. Every pass below skips
+  // any type it does not know, which is what keeps it out of them.
+  var LOOKUP_HIT = { hit: 1, loose: 1 };
+  var LOOKUP_MISS = { miss: 1 };
 
   function isEvent(e) {
     return e && typeof e === 'object' && !Array.isArray(e) && typeof e.fingerprint === 'string';
@@ -136,6 +141,33 @@ var ErrorbookStats = (function () {
       total: total,
       // No data is not 0%: say so rather than implying the team never hits.
       percent: total === 0 ? null : Math.round((hits / total) * 100),
+      measured: false,
+    };
+  }
+
+  // The same rate, actually measured: `errorbook run` asks the notebook before
+  // anything else and records what came back, so a window that has lookup lines
+  // in it needs no inference at all. An exact match and a similar one both mean
+  // the notebook had something to offer, so both count as a hit here; the
+  // distinction is kept in the lines themselves, not in this number.
+  //
+  // The two methods are never averaged or added together. A window either has
+  // lookups, in which case it is reported measured, or it has none and is
+  // reported derived -- summarise() picks, once, for the whole page.
+  function lookupRate(events) {
+    var hits = 0, misses = 0;
+    events.filter(isEvent).forEach(function (e) {
+      if (e.type !== 'lookup') return;
+      if (LOOKUP_HIT[e.result]) hits++;
+      else if (LOOKUP_MISS[e.result]) misses++;
+    });
+    var total = hits + misses;
+    return {
+      hits: hits,
+      misses: misses,
+      total: total,
+      percent: total === 0 ? null : Math.round((hits / total) * 100),
+      measured: true,
     };
   }
 
@@ -289,9 +321,16 @@ var ErrorbookStats = (function () {
     var list = Array.isArray(events) ? events : [];
     var errors = byError(list);
     var people = {};
-    list.filter(isEvent).forEach(function (e) { if (e.author) people[e.author] = true; });
+    // Who did something, not who ran a command: a lookup author has not
+    // necessarily saved or voted on anything, and counting them here would
+    // change the headline's people count the moment measuring was turned on.
+    list.filter(isEvent).forEach(function (e) {
+      if (e.type === 'lookup') return;
+      if (e.author) people[e.author] = true;
+    });
+    var measured = lookupRate(list);
     return {
-      hitRate: hitRate(list),
+      hitRate: measured.total ? measured : hitRate(list),
       errors: errors,
       timeline: timeline(list, now || Date.now(), days),
       people: Object.keys(people).sort(),
@@ -300,7 +339,7 @@ var ErrorbookStats = (function () {
   }
 
   return {
-    summarise: summarise, hitRate: hitRate, byError: byError,
+    summarise: summarise, hitRate: hitRate, lookupRate: lookupRate, byError: byError,
     timeline: timeline, firstName: firstName, chronological: chronological,
   };
 })();
@@ -346,16 +385,23 @@ var ErrorbookStats = (function () {
 
   function heroPanel(rate) {
     var pct = rate.percent === null ? '--' : rate.percent + '%';
+    // One method per number. Which one produced it is stated next to it, so a
+    // 58% read off a notebook with no lookups in it cannot be mistaken for a
+    // 58% that was actually counted.
+    var measured = rate.measured === true;
     var detail = rate.total === 0
       ? 'Nothing recorded yet.'
-      : rate.hits + ' of ' + rate.total + ' encounters had an answer waiting. ' +
+      : rate.hits + ' of ' + rate.total + (measured ? ' lookups' : ' encounters') + ' had an answer waiting. ' +
         rate.misses + ' did not, and someone had to work it out.';
+    var method = measured
+      ? 'Measured from lookups: every errorbook run asks the notebook before anything else, and what came back is recorded. An exact match and a similar one both count as an answer.'
+      : 'Derived, not measured: the first time an error is solved nobody had the answer; every later encounter with it did. That is what this measures.';
     return el('div', { class: 'panel hero' }, [
       el('div', { class: 'pct', text: pct }),
       el('div', {}, [
         el('div', { class: 'label', text: 'answered from the team notebook' }),
         el('div', { class: 'explain', text: detail }),
-        el('div', { class: 'explain', text: 'The first time an error is solved nobody had the answer; every later encounter with it did. That is what this measures.' }),
+        el('div', { class: 'explain', text: method }),
         el('div', { class: 'bar' }, [el('span', { style: 'width:' + (rate.percent || 0) + '%' })]),
       ]),
     ]);

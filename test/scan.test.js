@@ -163,6 +163,19 @@ test("every .jsonl in the folder is read, and nothing else is", () => {
   assert.deepEqual(findings.map((f) => f.file), ["ankit.jsonl", "louisa.jsonl"]);
 });
 
+test("a notebook of lookup lines is clean, and every line is still counted", () => {
+  const dir = notebook({
+    "ankit.jsonl":
+      line({ type: "lookup", fingerprint: "6ce249", result: "hit" }) +
+      line({ type: "lookup", fingerprint: "e73c44", result: "loose" }) +
+      line({ type: "lookup", fingerprint: "28b25a", result: "miss" }),
+  });
+  const result = scanDir({ dir });
+  assert.deepEqual(result.findings, [], "there is nothing in a lookup line to find");
+  assert.equal(result.lines, 3, "and nothing is skipped either");
+  assert.equal(scan(dir).code, 0);
+});
+
 // --- the command -----------------------------------------------------------
 
 test("a clean notebook prints clean on stdout and exits 0", () => {

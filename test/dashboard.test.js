@@ -225,6 +225,76 @@ test("an author slug is shown as a first name, as in the terminal", () => {
   assert.equal(S.firstName(null), "someone");
 });
 
+// --- measured vs derived ---------------------------------------------------
+// Two ways to get one number, and the page must never blend them. A notebook
+// written before `run` recorded lookups has none, and keeps the inferred rate
+// it has always shown; a notebook with lookups in it reports what was counted.
+
+// The seed, plus lookups: 3 hits, 1 loose and 1 miss, so 4 of 5 is 80%.
+function withLookups() {
+  return seed().concat([
+    { type: "lookup", fingerprint: "6ce249", result: "hit", author: "louisa-tambunting", ts: daysAgo(5) },
+    { type: "lookup", fingerprint: "6ce249", result: "hit", author: "ankit-aggarwal", ts: daysAgo(4) },
+    { type: "lookup", fingerprint: "204e89", result: "hit", author: "louisa-tambunting", ts: daysAgo(3) },
+    { type: "lookup", fingerprint: "e73c44", result: "loose", author: "ankit-aggarwal", ts: daysAgo(2) },
+    { type: "lookup", fingerprint: "28b25a", result: "miss", author: "ankit-aggarwal", ts: daysAgo(1) },
+  ]);
+}
+
+test("lookupRate counts a loose match as an answer and a miss as not", () => {
+  const rate = S.lookupRate(withLookups());
+  assert.equal(rate.hits, 4, "3 exact and 1 similar: the notebook had something either way");
+  assert.equal(rate.misses, 1);
+  assert.equal(rate.total, 5);
+  assert.equal(rate.percent, 80);
+  assert.equal(rate.measured, true);
+});
+
+test("lookupRate ignores everything that is not a lookup, and junk results", () => {
+  assert.equal(S.lookupRate(seed()).total, 0, "a notebook with no lookups has nothing to measure");
+  assert.equal(S.lookupRate(seed()).percent, null, "which is not 0%");
+  assert.equal(S.lookupRate([
+    { type: "lookup", fingerprint: "a", result: "nonsense", ts: daysAgo(1) },
+    { type: "lookup", fingerprint: "a", ts: daysAgo(1) },
+  ]).total, 0, "a result nobody writes is not counted either way");
+});
+
+test("a notebook with no lookups keeps the derived rate it always had", () => {
+  const stats = S.summarise(seed(), NOW, 14);
+  assert.equal(stats.hitRate.measured, false);
+  assert.equal(stats.hitRate.percent, 63, "unchanged: 5 of 8 encounters");
+});
+
+test("a notebook with lookups reports the measured rate instead", () => {
+  const stats = S.summarise(withLookups(), NOW, 14);
+  assert.equal(stats.hitRate.measured, true);
+  assert.equal(stats.hitRate.percent, 80);
+  assert.notEqual(stats.hitRate.percent, 63, "the derived number is not reported once there is a real one");
+  assert.equal(stats.hitRate.total, 5, "lookups only: the two methods are never added together");
+});
+
+test("lookups move no other number on the page", () => {
+  const plain = S.summarise(seed(), NOW, 14);
+  const measured = S.summarise(withLookups(), NOW, 14);
+
+  assert.deepEqual(measured.people, plain.people, "a lookup is not a person affected");
+  assert.equal(measured.totalHoursLost, plain.totalHoursLost);
+  assert.equal(measured.errors.length, plain.errors.length, "a looked-up error is not an error the team hit");
+  assert.deepEqual(
+    measured.errors.map((e) => [e.fingerprint, e.occurrences, e.peopleAffected, e.score, e.fixes.map((f) => f.confidence).join(",")]),
+    plain.errors.map((e) => [e.fingerprint, e.occurrences, e.peopleAffected, e.score, e.fixes.map((f) => f.confidence).join(",")]),
+  );
+  assert.deepEqual(measured.timeline.map((d) => d.total), plain.timeline.map((d) => d.total));
+});
+
+test("a notebook of nothing but lookups is a rate and no errors", () => {
+  const stats = S.summarise(withLookups().filter((e) => e.type === "lookup"), NOW, 14);
+  assert.equal(stats.hitRate.percent, 80);
+  assert.deepEqual(stats.errors, []);
+  assert.deepEqual(stats.people, []);
+  assert.equal(stats.totalHoursLost, 0);
+});
+
 // --- the page itself -------------------------------------------------------
 
 test("the page is one self-contained file", () => {
@@ -427,6 +497,30 @@ test("the page renders the headline number, the errors and the fortnight", () =>
 
   // Slugs are never shown raw, here either.
   assert.doesNotMatch(out, /ankit-aggarwal/);
+});
+
+test("the page labels a derived rate as derived", () => {
+  const out = renderWith(seed());
+  assert.match(out, /Derived, not measured/);
+  assert.doesNotMatch(out, /Measured from lookups/);
+  assert.match(out, /5 of 8 encounters had an answer waiting/);
+});
+
+test("the page labels a measured rate as measured, once, and in place of the other", () => {
+  const out = renderWith(withLookups());
+  assert.match(out, /80%/);
+  assert.match(out, /4 of 5 lookups had an answer waiting/);
+  assert.equal(out.match(/Measured from lookups/g).length, 1, "stated once, next to the number");
+  assert.doesNotMatch(out, /Derived, not measured/, "never both labels on one page");
+  assert.doesNotMatch(out, /63%/, "and never the other method's number");
+});
+
+test("the page renders a notebook of nothing but lookups", () => {
+  const out = renderWith(withLookups().filter((e) => e.type === "lookup"));
+  assert.match(out, /80%/);
+  assert.match(out, /Measured from lookups/);
+  assert.match(out, /the last two weeks/, "the rest of the page still renders");
+  assert.doesNotMatch(out, /top errors/, "with nothing to rank");
 });
 
 test("the page renders an empty notebook without the file picker claiming data", () => {

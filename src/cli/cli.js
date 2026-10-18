@@ -75,7 +75,15 @@ export async function runCli(args, deps = {}) {
         const lookupMs = Math.max(1, Math.round(performance.now() - startedAt));
 
         let explanation = null, offerSave = true;
-        if (result.kind !== 'none' && result.fix) {
+        const matched = result.kind !== 'none' && result.fix;
+        // Measured, not derived: one line saying the notebook was asked and how
+        // it answered. Recorded here and nowhere else -- `lookup`, `mcp` and
+        // the rest are read-only by design, and counting a question somebody
+        // typed as an encounter with a failing command would inflate the rate.
+        // The outcome is the one the user was just shown, so the number can
+        // never claim a hit the terminal called a miss.
+        book.appendLookup?.(event.errorId, !matched ? 'miss' : result.kind === 'loose' ? 'loose' : 'hit');
+        if (matched) {
           const fixes = [result.fix,...result.alternatives];
           // The caveat belongs before the fix, so it is read first.
           if (result.kind === 'loose') ui.line('\nThis is a similar error, not an exact match. Verify that the solution applies.');

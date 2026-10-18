@@ -111,7 +111,7 @@ shares fixes between people.
 
 ## Honest limits
 - Developed and tested on Windows only; nothing is platform-specific by design, but no other OS has been run.
-- The dashboard's hit rate is derived from the notebook, not measured: the first solve of an error counts as a miss, every later encounter as a hit. The page says so too.
+- The hit rate is measured where it can be: `errorbook run` records one `lookup` line per failing command (fingerprint, outcome, author, timestamp -- no error text, no fix text), and the dashboard and the digest count those. A window with no lookup lines in it -- a notebook from before this existed, or the demo seed -- falls back to deriving the rate, counting the first solve of an error as a miss and every later encounter as a hit. Whichever method produced the number is printed next to it, and the two are never mixed in one number.
 - The demo's explanations come from a committed seed cache (`src/explainer/seed-cache.json`) so it works offline; two of the four were written by hand after the Gemini free tier ran out.
 - `errorbook sync` touches only `.errorbook/`, and resolves to the nearest enclosing git repository, so run it from the project you mean.
 

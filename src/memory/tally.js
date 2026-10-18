@@ -6,6 +6,12 @@ export function groupByError(events) {
   const errors = new Map(); // fingerprint → { fingerprint, summary, loose, fixes: Map }
 
   for (const e of sorted) {
+    // A lookup line records that the notebook was asked a question, not an
+    // answer anyone gave. It carries no fixId, so it is no error's fix and
+    // nobody's vote: confidence and the vote counts must not move because
+    // somebody ran a command.
+    if (e.type === "lookup") continue;
+
     if (e.type === "solved") {
       if (!errors.has(e.fingerprint)) {
         errors.set(e.fingerprint, { fingerprint: e.fingerprint, summary: e.summary, loose: e.loose, fixes: new Map() });

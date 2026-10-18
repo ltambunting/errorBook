@@ -94,3 +94,32 @@ export function loadAll() {
   }
   return events;
 }
+
+// --- measured lookups -------------------------------------------------------
+
+// What a lookup can have come out as. "loose" is a similar error rather than
+// the same one, so it is kept apart from an exact hit: the reader of a rate
+// should be able to tell the two apart later even though both count as the
+// notebook having had an answer.
+export const LOOKUP_RESULTS = new Set(["hit", "loose", "miss"]);
+
+// One line per question the notebook was asked, so the hit rate can be
+// measured instead of inferred from what people happened to save.
+//
+// Deliberately nothing but the fingerprint, the outcome and who asked: no
+// error text, no fix text, no command. A lookup line is written on every single
+// failing run, including the ones nobody saves a fix for, so it is the one
+// event type that must carry nothing worth scrubbing.
+//
+// Never throws. Asking the notebook a question must not be able to fail the
+// command the developer actually ran, so an unwritable notebook, a full disk or
+// a read-only checkout all end here as a quiet null.
+export function appendLookup(fingerprint, result) {
+  try {
+    if (typeof fingerprint !== "string" || !fingerprint) return null;
+    if (!LOOKUP_RESULTS.has(result)) return null;
+    return append({ type: "lookup", fingerprint, result });
+  } catch {
+    return null;
+  }
+}

@@ -112,6 +112,42 @@ test("the hit rate is summarise()'s, and is labelled as derived rather than meas
   assert.match(md, /derived from the notebook, not measured/i);
 });
 
+test("the hit rate is measured, and said to be, once there are lookups", () => {
+  // 1 hit, 1 loose and 2 misses inside the week: 2 of 4 is 50%, which the
+  // derived method would have called 75%.
+  const events = seed().concat([
+    { type: "lookup", fingerprint: "6ce249", result: "hit", author: "louisa-tambunting", ts: daysAgo(4) },
+    { type: "lookup", fingerprint: "204e89", result: "miss", author: "ankit-aggarwal", ts: daysAgo(3) },
+    { type: "lookup", fingerprint: "e73c44", result: "loose", author: "ankit-aggarwal", ts: daysAgo(2) },
+    { type: "lookup", fingerprint: "28b25a", result: "miss", author: "louisa-tambunting", ts: daysAgo(1) },
+  ]);
+  const expected = S.summarise(withinWindow(events, { days: 7, now: NOW }), NOW, 7).hitRate;
+  assert.equal(expected.measured, true);
+  assert.equal(expected.percent, 50);
+
+  const md = report(events);
+  assert.match(md, new RegExp(`${expected.percent}% -- ${expected.hits} of ${expected.total} lookups`));
+  assert.match(md, /measured from lookups/i);
+  assert.doesNotMatch(md, /derived from the notebook, not measured/i, "one method per number, one label");
+
+  // The derived number for this same window is a different number, and must
+  // not appear anywhere in the report.
+  const derived = S.hitRate(withinWindow(events, { days: 7, now: NOW }));
+  assert.notEqual(derived.percent, expected.percent);
+  assert.doesNotMatch(md, new RegExp(`${derived.percent}% --`));
+});
+
+test("the headline counts no lookup as a person, an error or an hour", () => {
+  const events = seed();
+  const plain = report(events);
+  const withLookups = report(events.concat([
+    { type: "lookup", fingerprint: "ffffff", result: "miss", author: "mara", ts: daysAgo(1) },
+  ]));
+  const headline = (md) => md.slice(md.indexOf("## Headline"), md.indexOf("## Hit rate"));
+  assert.equal(headline(withLookups), headline(plain), "mara looked something up; she did not lose an hour to it");
+  assert.doesNotMatch(withLookups, /ffffff/, "a looked-up error is not a top error");
+});
+
 test("the top errors are summarise()'s order, with its score, counts and hours", () => {
   const events = seed();
   const expected = S.summarise(withinWindow(events, { days: 7, now: NOW }), NOW, 7).errors;

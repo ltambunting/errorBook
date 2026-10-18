@@ -100,13 +100,27 @@ export function digest(events, options = {}) {
   const rate = summary.hitRate;
   say('## Hit rate');
   say();
-  say(rate.percent === null
-    ? 'No encounters in this window, so there is no rate to report.'
-    : `${rate.percent}% -- ${rate.hits} of ${rate.total} encounters met an error the notebook already had an answer for.`);
-  say();
-  say('Derived from the notebook, not measured: the notebook records what people');
-  say('saved and voted on, not what they looked up. The first time an error is');
-  say('solved counts as a miss and every later encounter with it as a hit.');
+  // summarise() has already chosen the method for this window -- measured when
+  // there are lookup lines in it, derived when there are none -- so the only
+  // thing decided here is the wording. The two are never mixed in one number,
+  // and the method is always stated next to it.
+  if (rate.measured) {
+    say(rate.percent === null
+      ? 'No lookups in this window, so there is no rate to report.'
+      : `${rate.percent}% -- ${rate.hits} of ${rate.total} lookups asked the notebook and got an answer back.`);
+    say();
+    say('Measured from lookups: every `errorbook run` asks the notebook before');
+    say('anything else, and what came back is recorded. An exact match and a');
+    say('similar one both count as an answer found.');
+  } else {
+    say(rate.percent === null
+      ? 'No encounters in this window, so there is no rate to report.'
+      : `${rate.percent}% -- ${rate.hits} of ${rate.total} encounters met an error the notebook already had an answer for.`);
+    say();
+    say('Derived from the notebook, not measured: the notebook records what people');
+    say('saved and voted on, not what they looked up. The first time an error is');
+    say('solved counts as a miss and every later encounter with it as a hit.');
+  }
   say();
 
   // --- top errors
