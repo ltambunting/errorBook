@@ -19,7 +19,8 @@ const AUTH_SCHEME = /\b(bearer|basic|token)\s+([a-z0-9._~+/=-]{8,})/gi;
 
 // Anchored to `authorization`, never a bare `auth`: git prints "Author:" lines
 // and those have to stay readable.
-const SECRET_WORD = '(?:secret|token|password|passwd|api_?key|authorization|credential)';
+const SECRET_WORD =
+  '(?:secret|token|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|authorization|credential)';
 
 const SECRET_KEY = `[\\w.-]*${SECRET_WORD}s?[\\w.-]*["']?\\s*[:=]+\\s*`;
 
@@ -40,10 +41,16 @@ const SECRET_FLAG = new RegExp(`(--[\\w-]*${SECRET_WORD}[\\w-]*)(\\s+)(?!-)[^\\s
 const KNOWN_PREFIXES = [
   /\bsk-[a-z0-9_-]{8,}/gi, // OpenAI-style
   /\bgh[pousr]_[a-z0-9]{16,}/gi, // GitHub
+  /\bgithub_pat_[a-z0-9_]{20,}/gi, // GitHub fine-grained
   /\bAKIA[0-9A-Z]{8,}/g, // AWS access key id
   /\bxox[baprs]-[a-z0-9-]{8,}/gi, // Slack
   /\beyJ[a-z0-9_=-]{8,}(?:\.[a-z0-9_=-]+){0,2}/gi, // JWT
 ];
+
+// Whole PEM block, markers included: masking only the long base64 lines can
+// leave a short trailing line behind.
+const PRIVATE_KEY_BLOCK =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 
 // Long opaque runs: hex digests, base64 blobs.
 const LONG_HEX = /\b[0-9a-f]{32,}\b/gi;
@@ -58,6 +65,7 @@ export function scrub(text) {
   if (typeof text !== 'string' || text === '') return '';
 
   let out = text;
+  out = out.replace(PRIVATE_KEY_BLOCK, REDACTED);
   out = out.replace(URL_USERINFO, `$1${REDACTED}@`);
   for (const re of KNOWN_PREFIXES) out = out.replace(re, REDACTED);
   out = out.replace(AUTH_SCHEME, `$1 ${REDACTED}`);
@@ -185,6 +193,10 @@ const JS_ERROR = /\b(TypeError|ReferenceError|SyntaxError|RangeError|EvalError|U
 const NODE_CODE = /\b(ERR_[A-Z0-9_]+)\b/;
 const ERRNO_CODE = /\b(E[A-Z]{3,})\b/;
 const NPM_CODE = /npm (?:error|ERR!) code ([^\s]+)/;
+// npm prints no `npm error code` line for a missing script, so it is matched on
+// the message. The value is the one the notebook stores, so a fix saved for one
+// script name can be found loosely from another.
+const NPM_MISSING_SCRIPT = /npm (?:error|ERR!) Missing script:/;
 const GIT_FATAL = /^(?:fatal|error): /m;
 
 const NPM_MARKER = /^npm (?:error|ERR!|WARN)/m;
@@ -219,6 +231,7 @@ function detectLang(raw) {
 function detectErrorType(raw, lang) {
   const npm = raw.match(NPM_CODE);
   if (npm) return npm[1];
+  if (NPM_MISSING_SCRIPT.test(raw)) return 'missing-script';
   const node = raw.match(NODE_CODE);
   if (node) return node[1];
   const js = raw.match(JS_ERROR);

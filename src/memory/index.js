@@ -4,7 +4,7 @@ import { groupByError } from "./tally.js";
 import { pick } from "./rank.js";
 
 export { append, loadAll, me, makeFixId } from "./store.js";
-export { scrub } from "./scrub.js";
+export { scrub } from "../fingerprint/index.js";
 
 // Two loose descriptions match if they're the same kind of error in the same
 // language (and the same file, when both know the file).

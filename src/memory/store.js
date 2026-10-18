@@ -3,7 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { dataDir } from "./paths.js";
-import { scrub } from "./scrub.js";
+import { scrub } from "../fingerprint/index.js";
 
 // Names are always lowercase, so "Ankit" and "ankit" are the same person.
 // "Ankit Sharma" → "ankit-sharma"

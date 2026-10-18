@@ -80,6 +80,14 @@ for (const [, entries] of groups) {
   }
 }
 
+console.log('\n--- error types ---');
+for (const [prefix, entries] of groups) {
+  if (!prefix.startsWith('npm-missing-script')) continue;
+  for (const entry of entries) {
+    expect(`${entry.name}: errorType`, entry.loose.errorType, 'missing-script');
+  }
+}
+
 console.log('\n--- normalize is stable ---');
 const sample = readFileSync(join(SAMPLES, files[0]), 'utf8');
 expect('idempotent', normalize(normalize(sample)), normalize(sample));

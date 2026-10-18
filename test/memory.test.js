@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { append, loadAll, lookup, scrub } from "../src/memory/index.js";
 import { confidence } from "../src/memory/tally.js";
+import { fingerprint } from "../src/fingerprint/index.js";
 
 // Every test gets its own empty notebook folder.
 beforeEach(() => {
@@ -67,6 +68,32 @@ test("loose: a similar error finds the team's fix; nothing similar gives none", 
   assert.equal(lookup("ffffff", { lang: "npm", errorType: "missing-script", file: null }).kind, "loose");
   assert.equal(lookup("ffffff", { lang: "node", errorType: "TypeError", file: "api.js" }).kind, "none");
   assert.equal(lookup("ffffff").kind, "none");
+});
+
+// The seam between the two modules: what fingerprint() reports for a real npm
+// failure has to loose-match what the notebook stored, or a fix saved against
+// one script name is invisible from another.
+test("a live `npm run doesnotexist` loose-matches the notebook's 6ce249 entry", () => {
+  writeStarter();
+  const captured = fs.readFileSync(
+    new URL("../samples/npm-missing-script-doesnotexist-ankit.txt", import.meta.url),
+    "utf8",
+  );
+  const { id, loose } = fingerprint(captured);
+
+  // A different script, so the exact id cannot be the one the notebook knows.
+  assert.equal(id, "e73c44");
+  assert.notEqual(id, "6ce249");
+  assert.deepEqual(loose, { lang: "npm", errorType: "missing-script", file: null });
+
+  const found = lookup(id, loose);
+  assert.equal(found.kind, "loose");
+  assert.equal(found.fix.fingerprint, "6ce249");
+  assert.equal(found.fix.fix, "Add a build script to package.json");
+  assert.equal(found.fix.author, "ankit");
+
+  // Without the loose description there is nothing to go on.
+  assert.equal(lookup(id).kind, "none");
 });
 
 test("confidence table from the spec", () => {
