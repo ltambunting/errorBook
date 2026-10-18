@@ -158,7 +158,7 @@ test("npm and git summaries are unchanged: the first line was already right", ()
   assert.equal(npm.summary, 'npm error missing script: "build"');
 
   // `fatal` names no particular failure, so it must not outrank the first line.
-  // This is the real shape of the demo's b540a5, git's own suggested commands
+  // This is the real shape of the demo's git identity error, git's own commands
   // included -- they are also what tells detectLang this is git at all.
   const git = fingerprint([
     "Author identity unknown",
@@ -196,4 +196,42 @@ test("choosing a summary cannot change an id", () => {
     assert.equal(id, createHash("sha256").update(normalize(text)).digest("hex").slice(0, 6));
     assert.equal(normalize(text).includes(summary), true, "the summary is a line of the normalised text");
   }
+});
+
+test("the git identity error is one id for everyone, whoever git names", () => {
+  // Two-laptop mode leaves user.email set, so git's last line carries the
+  // reader's own address. Unmasked, the same missing-identity error got a
+  // different id on every machine, and the shipped explanation never matched.
+  const identity = (ident) => [
+    "Author identity unknown",
+    "",
+    "*** Please tell me who you are.",
+    "",
+    "Run",
+    "",
+    '  git config --global user.email "you@example.com"',
+    '  git config --global user.name "Your Name"',
+    "",
+    "to set your account's default identity.",
+    "Omit --global to set the identity only in this repository.",
+    "",
+    `fatal: empty ident name (for <${ident}>) not allowed`,
+  ].join("\n");
+
+  const ids = ["", "ankit@example.com", "louisa@example.com", "someone.else@corp.internal"]
+    .map((who) => fingerprint(identity(who)).id);
+  assert.equal(new Set(ids).size, 1, `ids diverged: ${ids.join(", ")}`);
+
+  assert.match(normalize(identity("a@b.com")), /\(for <who>\) not allowed/);
+  assert.match(normalize(identity("")), /\(for <who>\) not allowed/);
+  // The address is gone from the fingerprinted text entirely.
+  assert.doesNotMatch(normalize(identity("a@b.com")), /a@b\.com/);
+  // And the summary is still the readable first line.
+  assert.equal(fingerprint(identity("a@b.com")).summary, "author identity unknown");
+});
+
+test("masking the identity does not swallow ordinary prose", () => {
+  // Only `(for <...>)` is masked, not every angle bracket.
+  assert.match(normalize("waiting for <something> to finish"), /waiting for <something> to finish/);
+  assert.match(normalize("Expected <div> but found <span>"), /expected <div> but found <span>/);
 });

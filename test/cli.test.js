@@ -385,7 +385,7 @@ test("the committed seed answers the demo's errors with no key and no local cach
     provider: async () => { throw new Error("the provider must not be called"); },
   });
 
-  for (const errorId of ["6ce249", "fb4768", "28b25a", "b540a5"]) {
+  for (const errorId of ["6ce249", "fb4768", "28b25a", "27dfb3"]) {
     const r = await explainer.explain(
       { errorId, normalizedError: `whatever ${errorId} looked like here`, normalizationVersion: "test-1" },
       { offline: true },
@@ -409,7 +409,7 @@ test("the committed seed answers the demo's errors with no key and no local cach
 test("the seed cache is well formed and claims its provenance", async () => {
   const seed = JSON.parse(fs.readFileSync(new URL("../src/explainer/seed-cache.json", import.meta.url), "utf8"));
   assert.equal(seed.schemaVersion, 1);
-  assert.deepEqual(Object.keys(seed.entries).sort(), ["28b25a", "6ce249", "b540a5", "fb4768"]);
+  assert.deepEqual(Object.keys(seed.entries).sort(), ["27dfb3", "28b25a", "6ce249", "fb4768"]);
   for (const [id, entry] of Object.entries(seed.entries)) {
     assert.doesNotThrow(() => validateExplanation(entry), `${id} is not a valid explanation`);
     assert.ok(entry._source?.label, `${id} does not say what it is`);

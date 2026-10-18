@@ -102,6 +102,13 @@ const HOME_MARKERS = [/^[a-z]:\/users\/[^/]+\//, /^\/users\/[^/]+\//, /^\/home\/
 
 const ISO_TIMESTAMP = /\d{4}-\d{2}-\d{2}[t_ ]\d{2}[:_]\d{2}[:_]\d{2}(?:[.,_]\d+)?z?(?:[+-]\d{2}:?\d{2})?/gi;
 const LINE_COL = /:\d+(?::\d+)?\b/g;
+// Whoever git thinks you are. `fatal: empty ident name (for <a@b.com>) not
+// allowed` carries the reader's own email, so the same missing-identity error
+// fingerprinted differently for every person, and differently again when the
+// email is unset and git prints `(for <>)`. Written with character classes
+// rather than escaped parentheses, which a patch tool can collapse by a level.
+const IDENT_FOR = new RegExp("[(]for <[^>]*>[)]", "g");
+
 // Runtime versions (node.js v22.17.0) before the number rules get at them, so
 // version drift between machines does not split an id.
 const VERSION = /\bv\d+\.\d+(?:\.\d+)?(?:-[\w.]+)?\b/gi;
@@ -162,6 +169,12 @@ export function normalize(stderr) {
     return `\u0000P${parked.length - 1}\u0000`;
   };
   let out = stderr.replace(URL_RE, park).replace(NODE_SPECIFIER, park);
+
+  // Whoever git thinks you are. `fatal: empty ident name (for <a@b.com>) not
+  // allowed` carries the reader's own email, so the same missing-identity error
+  // fingerprinted differently on every machine -- and differently again when
+  // the email is unset and git prints `(for <>)`. Both become one id.
+  out = out.replace(IDENT_FOR, '(for <WHO>)');
 
   // Paths first: home -> ~, temp -> <TMP>, anything else absolute -> basename.
   out = out.replace(WIN_PATH, collapsePath).replace(POSIX_PATH, collapsePath);

@@ -77,7 +77,7 @@ frees the port for you.
 errorbook run git commit -m "demo"
 ```
 
-Fingerprint `b540a5`. Also unknown, so this is the second chance to show the
+Fingerprint `27dfb3`. Also unknown, so this is the second chance to show the
 save flow. Note that `Author identity unknown` and the suggested
 `git config --global user.name` lines survive unredacted: the credential
 scrubber is anchored to `authorization`, never bare `auth`, precisely so this
@@ -90,6 +90,91 @@ errorbook list                 # everything the notebook holds
 errorbook run --verbose npm run build   # fingerprint internals and fixIds
 errorbook dashboard            # the team view, opens in a browser
 ```
+
+## Two laptops, one notebook
+
+The single-machine demo shows lookup. To show the notebook actually travelling
+between people, point `DEMO_REMOTE` at a repository both machines can reach and
+`reset.sh` will clone it instead of starting a fresh one, keeping its `origin`.
+
+**Once, to create the shared repo.** Any empty repo will do — a GitHub repo, or
+a bare one on a shared drive:
+
+```
+git init --bare /shared/team.git          # or create an empty repo on GitHub
+```
+
+**Laptop A:**
+
+```
+DEMO_REMOTE=/shared/team.git sh demo/reset.sh
+cd demo/project
+export ERRORBOOK_AUTHOR_NAME="Ankit"      # how your sync commits are signed
+export ERRORBOOK_AUTHOR_EMAIL="ankit@example.com"
+```
+
+An empty remote needs a branch before anything can be pulled from it, so
+`reset.sh` makes the first commit and pushes it for you, setting the upstream.
+You should see:
+
+```
+Remote had no branches: pushing the first commit to origin/master ...
+origin/master is now the upstream; errorbook sync will push and pull.
+```
+
+Now break something and write up the fix:
+
+```
+errorbook run node server.js              # not in the notebook -> save a fix
+errorbook sync                            # commits and pushes your notes
+```
+
+**Laptop B:**
+
+```
+DEMO_REMOTE=/shared/team.git sh demo/reset.sh
+cd demo/project
+export ERRORBOOK_AUTHOR_NAME="Louisa"
+export ERRORBOOK_AUTHOR_EMAIL="louisa@example.com"
+errorbook sync                            # pulls Ankit's notes
+errorbook run node server.js              # now an instant hit, found by Ankit
+```
+
+Confirm it as Louisa and sync again, and Ankit sees the confidence rise from
+`unproven` to `medium` on his next sync. That is the whole product in two
+commands.
+
+With `DEMO_REMOTE` set, `reset.sh` differs in four ways:
+
+- it **clones** rather than `git init`, and leaves `origin` alone;
+- if the remote is **empty**, it makes the first commit and pushes it with
+  `-u`, so there is a branch and an upstream for sync to work against. If the
+  push is refused it says so and prints the command to run by hand;
+- the notebook is **only seeded when the clone has none**, so whatever the other
+  laptop pushed is never deleted — re-running reset on laptop B keeps the team's
+  real notebook;
+- only `user.name` is blanked, not `user.email`. `git commit` still fails with
+  `Author identity unknown`, but the half-identity is enough for git to work
+  with once `errorbook sync` supplies a name.
+
+`errorbook sync` can commit even though the local `user.name` is empty: it
+passes an identity for the length of the command only, from
+`ERRORBOOK_AUTHOR_NAME` and `ERRORBOOK_AUTHOR_EMAIL`, and writes nothing to any
+config file. Without those it falls back to `errorbook <errorbook@localhost>`
+so sync never fails on the demo's own setup.
+
+Two things to watch:
+
+- **Unset `ERRORBOOK_DIR`** before running the demo. If it points somewhere
+  else, the notebook resolves there instead of to `demo/project`, and sync
+  refuses because that path is outside the repository.
+- Run `errorbook sync` **from inside `demo/project`**. Run anywhere else it
+  resolves to the nearest enclosing git repository and syncs that one instead.
+- State 4 has the same fingerprint either way. git's last line names whoever
+  it could not use -- `fatal: empty ident name (for <you@example.com>) not
+  allowed`, or `(for <>)` when the email is unset too -- so normalize masks
+  that to `(for <WHO>)`. Without it the same error got a different id for
+  every person and the shipped explanation never matched.
 
 ## What is in the seeded notebook
 
@@ -105,7 +190,7 @@ failure, not invented:
 | postgres `ECONNREFUSED` | `65975b` | one fix, confirmed |
 | eslint config missing | `20116d` | one fix, nobody has checked it |
 
-`28b25a` (port in use) and `b540a5` (git identity) are deliberately absent.
+`28b25a` (port in use) and `27dfb3` (git identity) are deliberately absent.
 
 Timestamps are generated relative to the day you run `reset.sh`, so the
 dashboard's two-week timeline is never stale.

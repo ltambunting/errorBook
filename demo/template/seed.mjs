@@ -8,7 +8,7 @@
 // The fingerprints are real: every one was captured from an actual failure.
 // 6ce249 and fb4768 are the demo's own broken states 1 and 2. The other three
 // are ordinary errors from a working week, so the dashboard has something to
-// rank. Broken states 3 (EADDRINUSE, 28b25a) and 4 (git identity, b540a5) are
+// rank. Broken states 3 (EADDRINUSE, 28b25a) and 4 (git identity, 27dfb3) are
 // deliberately absent -- those demonstrate a miss, the AI fallback and saving.
 import { fileURLToPath } from 'node:url';
 import { rmSync } from 'node:fs';

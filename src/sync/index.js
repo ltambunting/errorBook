@@ -8,8 +8,43 @@ import { loadAll } from "../memory/store.js";
 
 const say = (msg) => console.log(`[errorbook] ${msg}`);
 
-function git(...args) {
+function raw(...args) {
   return execFileSync("git", args, { cwd: repoRoot(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+// `git config --get user.name` exits non-zero when the key is unset, and prints
+// an empty line when it is set to "". Neither is a usable identity.
+function configured(key) {
+  try {
+    return raw("config", "--get", key) !== "";
+  } catch {
+    return false;
+  }
+}
+
+// The demo deliberately blanks the git identity, because "Author identity
+// unknown" is one of the errors it shows. Sync still has to be able to write,
+// so when git has no identity of its own it supplies one for the length of the
+// command only -- nothing is written to any config file. ERRORBOOK_AUTHOR_NAME
+// and ERRORBOOK_AUTHOR_EMAIL set it; without them sync still works rather than
+// failing on the demo's own setup.
+let identity = null;
+function identityArgs() {
+  if (identity) return identity;
+  identity = [];
+  if (!configured("user.name")) {
+    identity.push("-c", `user.name=${process.env.ERRORBOOK_AUTHOR_NAME || process.env.ERRORBOOK_AUTHOR || "errorbook"}`);
+  }
+  if (!configured("user.email")) {
+    identity.push("-c", `user.email=${process.env.ERRORBOOK_AUTHOR_EMAIL || "errorbook@localhost"}`);
+  }
+  return identity;
+}
+
+// Every git call goes through here, so a merge commit made by `git pull` gets
+// the same identity the commit did.
+function git(...args) {
+  return raw(...identityArgs(), ...args);
 }
 
 // First line of git's error message, for a short explanation.

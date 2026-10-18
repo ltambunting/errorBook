@@ -40,7 +40,7 @@
         "summary": "error [err_module_not_found]: cannot find package 'express' imported from ~/app.mjs"
       }
     },
-    "b540a5": {
+    "27dfb3": {
       "explanation": "Git will not create a commit until it knows who is making it, and no author name or email is configured for this repository. Every commit records an author, so it refuses rather than guess.",
       "suggestedSteps": [
         "Set them with \"git config user.name 'Your Name'\" and \"git config user.email you@example.com\", adding --global to apply it to every repository, then commit again."
@@ -50,7 +50,8 @@
         "label": "git identity unset",
         "model": "hand-written",
         "generatedAt": "2026-10-18T06:10:00.000Z",
-        "summary": "author identity unknown"
+        "summary": "author identity unknown",
+        "note": "git identity errors all share this id now that (for <email>) is masked; was b540a5 before that rule."
       }
     }
   }

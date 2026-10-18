@@ -71,7 +71,7 @@ const CASES = [
   { id: '6ce249', label: 'npm missing script', run: () => capture(['npm', 'run', 'build']) },
   { id: 'fb4768', label: 'module not found', run: () => capture([process.execPath, 'app.mjs']) },
   { id: '28b25a', label: 'port already in use', run: capturePortInUse },
-  { id: 'b540a5', label: 'git identity unset', run: () => capture(['git', 'commit', '-m', 'seed']) },
+  { id: '27dfb3', label: 'git identity unset', run: () => capture(['git', 'commit', '-m', 'seed']) },
 ];
 
 const only = process.argv.slice(2);
